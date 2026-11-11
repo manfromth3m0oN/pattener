@@ -203,7 +203,7 @@ function renderCurveList() {
     const sw = document.createElement('span');
     sw.className = 'kind';
     sw.style.background = `rgb(${(c.kind === 'edge' ? EDGE_COLOR : SEAM_COLOR).map((x) => x * 255).join(',')})`;
-    li.append(sw, `${c.name} (${c.kind}, ${c.points.length} point${c.points.length === 1 ? '' : 's'}${c.closed ? ', loop' : ''}${c.mirror ? ', mirrored' : ''})`);
+    li.append(sw, `${c.name} (${c.kind}, ${c.points.length} point${c.points.length === 1 ? '' : 's'}${c.closed ? ', loop' : ''}${c.mirror ? ', mirrored' : ''}${finishText(c)})`);
     li.onclick = () => { active = i; setPicking('add'); renderCurveList(); drawMarks(); };
     return li;
   }));
@@ -213,7 +213,50 @@ function renderCurveList() {
     $('g-name').value = c.name;
     $('g-closed').checked = c.closed;
     $('g-mirror').checked = c.mirror;
+    showFinish(c);
   }
+}
+
+// Construction finish of the selected curve: seams glued or zipped; edges
+// left to the hem allowance, raw, hemmed or trimmed.
+function showFinish(c) {
+  const edge = c.kind === 'edge';
+  $('g-seam-finish-wrap').hidden = edge;
+  $('g-edge-finish-wrap').hidden = !edge;
+  $('g-seam-finish').value = c.seam_finish || 'glued';
+  const fin = c.edge_finish;
+  $('g-edge-finish').value = fin ? fin.kind : '';
+  if (fin && fin.width_mm != null) $('g-finish-width').value = fin.width_mm;
+  if (fin && fin.ease != null) $('g-finish-ease').value = Math.round(100 * fin.ease);
+  $('g-finish-width-wrap').hidden = !fin || fin.kind === 'raw';
+  $('g-finish-ease-wrap').hidden = !fin || fin.kind !== 'trim';
+}
+function readFinish() {
+  const c = design.curves[active];
+  if (!c) return;
+  if (c.kind === 'seam') {
+    if ($('g-seam-finish').value === 'zip') c.seam_finish = 'zip'; else delete c.seam_finish;
+  } else {
+    const kind = $('g-edge-finish').value;
+    const width_mm = Math.max(1, +$('g-finish-width').value || 15);
+    const ease = Math.min(1, Math.max(0.5, (+$('g-finish-ease').value || 90) / 100));
+    if (!kind) delete c.edge_finish;
+    else if (kind === 'raw') c.edge_finish = { kind };
+    else if (kind === 'hem') c.edge_finish = { kind, width_mm };
+    else c.edge_finish = { kind, width_mm, ease };
+  }
+  showFinish(c);
+  saveLocal();
+  renderCurveList();
+}
+['g-seam-finish', 'g-edge-finish', 'g-finish-width', 'g-finish-ease'].forEach((id) => { $(id).onchange = readFinish; });
+function finishText(c) {
+  if (c.kind === 'seam') return c.seam_finish === 'zip' ? ', zip' : '';
+  const fin = c.edge_finish;
+  if (!fin) return '';
+  if (fin.kind === 'raw') return ', raw';
+  if (fin.kind === 'hem') return `, ${fin.width_mm} mm hem`;
+  return `, ${fin.width_mm} mm trim`;
 }
 
 function drawMarks() {
@@ -674,6 +717,7 @@ function show(output, extraFiles) {
   dl.replaceChildren(document.createTextNode('Download: '));
   extraFiles.forEach(([n, t, ty]) => dl.appendChild(fileLink(n, t, ty)));
   r.panels.forEach((p, i) => dl.appendChild(fileLink(p.file, output.panel_svgs[i], 'image/svg+xml')));
+  if (output.pdf) dl.appendChild(fileLink('pattern.pdf', output.pdf, 'application/pdf'));
   if (output.layout_svg) dl.appendChild(fileLink('layout.svg', output.layout_svg, 'image/svg+xml'));
   dl.appendChild(fileLink('report.json', JSON.stringify(r, null, 2), 'application/json'));
 
@@ -705,6 +749,31 @@ function show(output, extraFiles) {
       h4.textContent = `${u.sheet}: ${f(u.length_mm / 1000, 2)} m of a ${f(u.roll_width_mm, 0)} mm roll`;
       mout.append(h4, svgImage(output.material_layouts[i], `layout on ${u.sheet}`));
       dl.appendChild(fileLink(u.file, output.material_layouts[i], 'image/svg+xml'));
+    });
+  }
+
+  const aout = $('assembly-out');
+  aout.replaceChildren();
+  if (r.assembly && r.assembly.length) {
+    const h = document.createElement('h3');
+    h.textContent = 'Assembly';
+    const ol = document.createElement('ol');
+    ol.id = 'assembly';
+    ol.append(...r.assembly.map((step) => Object.assign(document.createElement('li'), { textContent: step })));
+    aout.append(h, ol);
+  }
+  const tout = $('trims-out');
+  tout.replaceChildren();
+  if (r.trims && r.trims.length) {
+    const h = document.createElement('h3');
+    h.textContent = 'Trim strips';
+    tout.append(h);
+    r.trims.forEach((t, i) => {
+      const name = `trim_${String(i).padStart(2, '0')}.svg`;
+      const h4 = document.createElement('h4');
+      h4.textContent = `${t.edge}: ${f(t.length_mm, 0)} × ${f(t.width_mm, 0)} mm (edge ${f(t.edge_length_mm, 0)} mm)`;
+      tout.append(h4, svgImage(output.trim_svgs[i], `${t.edge} trim`));
+      dl.appendChild(fileLink(name, output.trim_svgs[i], 'image/svg+xml'));
     });
   }
 
@@ -769,7 +838,9 @@ async function run() {
         allowance_side: $('allowance-side').value,
         hem_allowance: num('hem'),
         notch_spacing: num('notch') > 0 ? num('notch') : null,
+        zip_allowance: num('zip'),
       },
+      print: $('paper').value ? { paper: $('paper').value } : null,
       heatmap: $('heatmap').value || null,
       length_relief: Math.max(0, Math.min(100, num('length-relief'))) / 100,
       material: { thickness_mm: num('thickness') || 0.4 },

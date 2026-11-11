@@ -1,3 +1,4 @@
+[hidden] { display: none !important; }
 :root { font-family: system-ui, sans-serif; color: #1d1d1f; background: #fafafa; }
 body { margin: 0 auto; max-width: 1100px; padding: 1rem 1.5rem 3rem; }
 header p { color: #555; margin-top: -0.5rem; }
