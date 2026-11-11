@@ -1,0 +1,17 @@
+[package]
+name = "latexpat"
+description = "Command-line pattern generator for latex garments"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "latexpat"
+path = "src/main.rs"
+
+[dependencies]
+latexpat-core = { workspace = true, features = ["serde"] }
+serde_json.workspace = true
+clap.workspace = true
+anyhow.workspace = true
