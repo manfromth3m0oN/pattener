@@ -58,4 +58,13 @@ fn main() {
     path.push(0);
     path.extend((1..=rings).map(|k| ring(k, 0)));
     write("cap.seams.json", seams_json(&[("meridian", path)]));
+
+    // Same cap cut around ring 5 (a dome inside a band) plus one radial seam
+    // to open the band. The ring's two sides flatten to different lengths.
+    let ring_loop: Vec<u32> = (0..=segs).map(|i| ring(5, i % segs)).collect();
+    let radial: Vec<u32> = (5..=rings).map(|k| ring(k, 0)).collect();
+    write(
+        "cap.ring.seams.json",
+        seams_json(&[("ring", ring_loop), ("radial", radial)]),
+    );
 }

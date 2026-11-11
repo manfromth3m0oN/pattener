@@ -22,10 +22,14 @@ cargo run --release -p latexpat -- flatten body.obj --seams seams.json --ease 0.
 | `--up AXIS` | body axis that points up the page: `x y z -x -y -z` (default `y`) |
 | `--heatmap M` | `none`, `max` (σ_max) or `area` (σ_min·σ_max) |
 | `--heatmap-range R` | stretch where colours saturate (default 1.5) |
+| `--no-seam-matching` | keep each panel's independent flattening |
+| `--seam-weight W` | strength of the seam-length constraints (default 10) |
+| `--seam-tolerance MM` | warn when a seam's sides still differ by more than this (default 1 mm) |
 
 Output: `out/panel_NN.svg` (1:1 scale in mm, with a 50 mm scale bar to check
-printing) and `out/report.json` (per-panel stretch range, areas, flipped
-triangles). Heatmap colours: blue = slack (σ < 1), white = unstretched,
+printing; each seam edge is labelled with the panel it joins) and
+`out/report.json` (per-panel stretch range, areas, flipped triangles; per-seam
+body and flat lengths before and after matching). Heatmap colours: blue = slack (σ < 1), white = unstretched,
 orange = stretched (σ > 1).
 
 ### Seam file
@@ -59,9 +63,13 @@ boundary loops), e.g. a tube needs one lengthwise seam.
 3. `lscm::lscm`: least-squares conformal map, initial layout.
 4. `arap::arap`: local/global ARAP towards reference triangles scaled by the
    per-triangle `Ease`.
-5. `strain::measure`: deformation gradient `F = P Q⁻¹` of flat → body,
+5. `seam_match`: pairs the two sides of every seam (splitting where a seam
+   crosses another) and equalises their flat lengths edge by edge by
+   re-running ARAP with soft edge-length targets, correcting the targets
+   each round until the sides agree.
+6. `strain::measure`: deformation gradient `F = P Q⁻¹` of flat → body,
    principal stretches, flipped triangles.
-6. `flatten::orient` + `svg::panel_svg`: upright, minimum bounding-box
+7. `flatten::orient` + `svg::panel_svg`: upright, minimum bounding-box
    placement and SVG export.
 
 Each stage documents its formulas in rustdoc (`cargo doc --open -p latexpat-core`).
@@ -72,13 +80,15 @@ Each stage documents its formulas in rustdoc (`cargo doc --open -p latexpat-core
 (stretch exactly `1/s`), a tube opened by one seam and an open cylinder
 panel (unroll with stretch `1/s`), and a spherical cap (per-triangle
 stretches within 1.5 % of an independent axisymmetric ARAP solution). Every
-case also checks for positive flat areas and no flipped triangles.
+case also checks for positive flat areas and no flipped triangles. Seam
+matching is tested on a cap cut around a ring, where the dome and the band
+flatten to sides 3.1 mm apart; matching removes the gap edge by edge
+(< 0.01 mm) while changing stretch by under 0.01.
 
 ## Roadmap
 
 1. ✅ Cut, flatten (LSCM + ease-scaled ARAP), strain report, SVG.
-2. Seam-length matching between paired panel edges (uses
-   `Panel::boundary` seam tags and `vertex_origin`).
+2. ✅ Seam-length matching between paired panel edges, with mismatch warnings.
 3. Glue-overlap allowance, notches, sheet-width nesting.
 4. Swatch calibration → per-sheet-thickness ease (`Ease::PerTriangle`).
 5. Parametric body from measurements; web UI via WASM.

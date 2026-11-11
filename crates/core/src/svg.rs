@@ -64,6 +64,17 @@ pub struct SvgOptions {
     pub margin: f64,
     /// Title printed above the piece.
     pub label: Option<String>,
+    /// Text placed along chains of boundary edges (e.g. seam names).
+    pub edge_labels: Vec<EdgeLabel>,
+}
+
+/// A label along a chain of boundary edges, placed at its arc-length
+/// midpoint, just inside the piece and parallel to the edge.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EdgeLabel {
+    /// Indices into the panel's `boundary`, in order.
+    pub edges: Vec<usize>,
+    pub text: String,
 }
 
 impl Default for SvgOptions {
@@ -73,6 +84,7 @@ impl Default for SvgOptions {
             range: 1.5,
             margin: 10.0,
             label: None,
+            edge_labels: Vec::new(),
         }
     }
 }
@@ -177,6 +189,34 @@ pub fn panel_svg(fp: &FlatPanel, opts: &SvgOptions) -> String {
         r#"<path id="outline" d="{d}" fill="none" stroke="black" stroke-width="0.3" stroke-linejoin="round"/>"#
     );
 
+    if !opts.edge_labels.is_empty() {
+        let _ = writeln!(
+            s,
+            r#"<g id="edge-labels" font-family="sans-serif" font-size="2.5" text-anchor="middle">"#
+        );
+        for l in &opts.edge_labels {
+            if let Some((p, dir)) = edge_chain_midpoint(fp, &l.edges) {
+                // Interior is to the left of the boundary direction.
+                let q = p + 3.0 * dir.perp();
+                // To SVG space (y flipped); keep the text upright.
+                let mut a = (-dir.y).atan2(dir.x).to_degrees();
+                if a > 90.0 {
+                    a -= 180.0;
+                } else if a < -90.0 {
+                    a += 180.0;
+                }
+                let _ = writeln!(
+                    s,
+                    r#"<text transform="translate({:.3} {:.3}) rotate({a:.2})" dominant-baseline="middle">{}</text>"#,
+                    q.x,
+                    -q.y,
+                    escape(&l.text)
+                );
+            }
+        }
+        let _ = writeln!(s, "</g>");
+    }
+
     // Footer: 50 mm scale bar and legend.
     let fy = hi.y + m + 4.0;
     let fx = lo.x - m + 2.0;
@@ -218,6 +258,27 @@ pub fn panel_svg(fp: &FlatPanel, opts: &SvgOptions) -> String {
     s
 }
 
+/// Arc-length midpoint of a chain of boundary edges (flat coordinates) and
+/// the unit direction of the edge it falls on.
+fn edge_chain_midpoint(fp: &FlatPanel, edges: &[usize]) -> Option<(DVec2, DVec2)> {
+    let seg = |bi: usize| {
+        let e = fp.panel.boundary[bi];
+        (fp.uv[e.from as usize], fp.uv[e.to as usize])
+    };
+    let total: f64 = edges.iter().map(|&b| seg(b).0.distance(seg(b).1)).sum();
+    let mut left = 0.5 * total;
+    for &b in edges {
+        let (a, c) = seg(b);
+        let len = a.distance(c);
+        if left <= len && len > 0.0 {
+            let dir = (c - a) / len;
+            return Some((a + dir * left, dir));
+        }
+        left -= len;
+    }
+    None
+}
+
 fn escape(t: &str) -> String {
     t.replace('&', "&amp;")
         .replace('<', "&lt;")
@@ -241,7 +302,9 @@ mod tests {
     #[test]
     fn svg_is_mm_sized_and_contains_outline() {
         let m = testmesh::grid(4, 2, 25.0);
-        let fp = &flatten_garment(&m, &SeamSet::default(), &FlattenOptions::default()).unwrap()[0];
+        let fp = &flatten_garment(&m, &SeamSet::default(), &FlattenOptions::default())
+            .unwrap()
+            .panels[0];
         let svg = panel_svg(
             fp,
             &SvgOptions {
