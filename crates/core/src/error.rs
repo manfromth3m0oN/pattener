@@ -74,6 +74,10 @@ pub enum Error {
         sheet_width: f64,
     },
 
+    /// Swatch calibration input is invalid.
+    #[error("calibration: {0}")]
+    Calibration(String),
+
     /// A sparse linear solve failed (usually a degenerate panel).
     #[error("linear solve failed: {0}")]
     Solve(String),
