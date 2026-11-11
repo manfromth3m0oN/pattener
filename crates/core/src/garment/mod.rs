@@ -1080,6 +1080,33 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn assembly_order_on_the_top() {
+        let (mesh, tapes) = body();
+        let design = top(&mesh, &tapes);
+        let g = build(&mesh, &design).unwrap();
+        let out = run(g.mesh.as_ref().unwrap(), &g.seams, &JobOptions::default()).unwrap();
+        let steps = &out.report.assembly;
+        // Cutting first; then one shoulder joins front and back (shortest
+        // seam), and the other shoulder and both sides close the garment.
+        assert!(steps[0].starts_with("Cut each piece"));
+        assert!(
+            steps[1].starts_with("Join pieces") && steps[1].contains("shoulder"),
+            "{}",
+            steps[1]
+        );
+        assert_eq!(
+            steps.iter().filter(|s| s.starts_with("Close")).count(),
+            3,
+            "{steps:#?}"
+        );
+        assert!(
+            steps[1].contains("6 mm lap") && steps[1].contains("match notches"),
+            "{}",
+            steps[1]
+        );
+    }
+
+    #[test]
     fn unenclosed_garment_is_reported() {
         let (mesh, tapes) = body();
         let mut design = top(&mesh, &tapes);

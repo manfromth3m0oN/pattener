@@ -39,6 +39,25 @@ pub enum AllowanceSide {
     None,
 }
 
+/// How a seam is closed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "lowercase"))]
+pub enum SeamFinish {
+    /// A glued lap seam (the allowance goes on one side).
+    #[default]
+    Glued,
+    /// A zip: both sides get a strip to glue the zip tape under, and the
+    /// edges are not glued to each other.
+    Zip,
+}
+
+impl SeamFinish {
+    fn is_default(&self) -> bool {
+        *self == SeamFinish::Glued
+    }
+}
+
 /// One seam polyline.
 #[derive(Debug, Clone, PartialEq, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -63,6 +82,12 @@ pub struct Seam {
         serde(default, skip_serializing_if = "Option::is_none")
     )]
     pub allowance: Option<AllowanceSide>,
+    /// Glued (default) or a zip.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "SeamFinish::is_default")
+    )]
+    pub finish: SeamFinish,
 }
 
 /// All seams of a garment.
