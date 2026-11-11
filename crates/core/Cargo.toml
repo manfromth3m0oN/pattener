@@ -1,0 +1,20 @@
+[package]
+name = "latexpat-core"
+description = "Pattern flattening for latex (natural rubber sheet) garments"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = []
+serde = ["dep:serde", "glam/serde"]
+
+[dependencies]
+glam.workspace = true
+faer.workspace = true
+thiserror.workspace = true
+serde = { workspace = true, optional = true }
+
+[dev-dependencies]
+approx.workspace = true
