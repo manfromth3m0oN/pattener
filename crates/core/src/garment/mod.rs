@@ -49,6 +49,7 @@
 //!    polylines in it (parts outside the garment are dropped).
 
 pub mod edit;
+pub mod examples;
 
 use crate::error::{Error, Result};
 use crate::mesh::Mesh;
@@ -712,6 +713,7 @@ enum Step {
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use super::examples::top;
     use super::*;
     use crate::human::{fit, test_model, MeasureKind, Measurements, Measurer, ShapeOptions};
     use crate::job::{run, JobOptions};
@@ -728,84 +730,11 @@ pub(crate) mod tests {
         &tapes.iter().find(|t| t.0 == k).unwrap().1
     }
 
-    /// `n` evenly spaced points of a closed loop, as surface points.
-    fn ring(mesh: &Mesh, loop_: &[DVec3], n: usize) -> Vec<SurfacePoint> {
-        (0..n)
-            .map(|i| {
-                locate(
-                    mesh.positions(),
-                    mesh.triangles(),
-                    loop_[i * loop_.len() / n],
-                )
-            })
-            .collect()
-    }
-
     fn extreme(loop_: &[DVec3], key: impl Fn(&DVec3) -> f64) -> DVec3 {
         *loop_
             .iter()
             .max_by(|a, b| key(a).total_cmp(&key(b)))
             .unwrap()
-    }
-
-    /// A short-sleeved top: hem at the hips, neckline, sleeve openings
-    /// around the upper arms, side seams from hem to sleeve and shoulder
-    /// seams from neckline to sleeve.
-    pub(crate) fn top(mesh: &Mesh, tapes: &[(MeasureKind, Vec<DVec3>)]) -> GarmentDesign {
-        use MeasureKind::*;
-        let at = |p: DVec3| locate(mesh.positions(), mesh.triangles(), p);
-        let hips = tape(tapes, Hips);
-        let side = |k| extreme(tape(tapes, k), |p| p.x);
-        let arm_bottom = extreme(tape(tapes, UpperArm), |p| -p.y);
-        let arm_top = extreme(tape(tapes, UpperArm), |p| p.y);
-        let neck_side = extreme(tape(tapes, Neck), |p| p.x);
-        let curve = |name: &str, kind, points, closed, mirror| Curve {
-            name: name.into(),
-            kind,
-            points,
-            closed,
-            mirror,
-        };
-        GarmentDesign {
-            curves: vec![
-                curve("hem", CurveKind::Edge, ring(mesh, hips, 12), true, false),
-                curve(
-                    "neckline",
-                    CurveKind::Edge,
-                    ring(mesh, tape(tapes, Neck), 10),
-                    true,
-                    false,
-                ),
-                curve(
-                    "sleeve",
-                    CurveKind::Edge,
-                    ring(mesh, tape(tapes, UpperArm), 8),
-                    true,
-                    true,
-                ),
-                curve(
-                    "side",
-                    CurveKind::Seam,
-                    vec![
-                        at(side(Hips)),
-                        at(side(Waist)),
-                        at(side(Underbust)),
-                        at(side(Bust)),
-                        at(arm_bottom),
-                    ],
-                    false,
-                    true,
-                ),
-                curve(
-                    "shoulder",
-                    CurveKind::Seam,
-                    vec![at(neck_side), at(arm_top)],
-                    false,
-                    true,
-                ),
-            ],
-            inside: Some(at(extreme(tape(tapes, Waist), |p| p.z))),
-        }
     }
 
     #[test]

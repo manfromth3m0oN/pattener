@@ -9,6 +9,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use latexpat_core::arap::ArapOptions;
 use latexpat_core::body::{torso, BodyMeasurements, BodyOptions, SeamStyle};
 use latexpat_core::calibrate::{calibrate, Calibration, CalibrationResult, SheetFit};
+use latexpat_core::garment::build;
 use latexpat_core::glam::DVec3;
 use latexpat_core::human::{fit, BodyModel, Measurer};
 use latexpat_core::job::{self, EaseSpec, JobOptions, JobOutput, Report};
@@ -94,10 +95,14 @@ struct CalibrateArgs {
 #[derive(clap::Args)]
 struct FlattenArgs {
     /// Triangle/polygon mesh in OBJ format (millimetres unless --scale is given).
-    mesh: PathBuf,
+    #[arg(required_unless_present = "project")]
+    mesh: Option<PathBuf>,
     /// Seam file: {"seams": [{"name": "...", "vertices": [0-based OBJ vertex indices]}]}.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "project")]
     seams: Option<PathBuf>,
+    /// Project file with a body and a garment drawn on it (instead of a mesh).
+    #[arg(long, conflicts_with = "mesh")]
+    project: Option<PathBuf>,
     /// Ease factor s: flat edge length = s × body edge length (default 0.85).
     #[arg(long, conflicts_with = "calibration")]
     ease: Option<f64>,
@@ -383,17 +388,47 @@ fn flatten(args: FlattenArgs) -> Result<()> {
     if !(args.heatmap_range > 1.0) {
         bail!("--heatmap-range must be greater than 1");
     }
-    let text = fs::read_to_string(&args.mesh)
-        .with_context(|| format!("reading {}", args.mesh.display()))?;
-    let mut mesh = parse_obj(&text).with_context(|| format!("loading {}", args.mesh.display()))?;
-    mesh.scale(args.scale);
-
-    let seams: SeamSet = match &args.seams {
-        Some(p) => {
-            let t = fs::read_to_string(p).with_context(|| format!("reading {}", p.display()))?;
-            serde_json::from_str(&t).with_context(|| format!("parsing {}", p.display()))?
+    let (mesh, seams, source, up) = match (&args.project, &args.mesh) {
+        (Some(path), _) => {
+            let t =
+                fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+            let project: Project =
+                serde_json::from_str(&t).with_context(|| format!("parsing {}", path.display()))?;
+            let model = BodyModel::bundled();
+            let measurer = Measurer::new(&model)?;
+            let body = fit(
+                &model,
+                &measurer,
+                &project.body.measurements,
+                &project.body.shape,
+            )?;
+            let g = build(&body.mesh, &project.garment)?;
+            for w in &g.warnings {
+                eprintln!("warning: {w}");
+            }
+            let mesh = g.mesh.with_context(|| {
+                "the project's garment has no area yet: draw its edges and pick a point inside"
+            })?;
+            // The body model is Y-up.
+            (mesh, g.seams, path.display().to_string(), DVec3::Y)
         }
-        None => SeamSet::default(),
+        (None, Some(path)) => {
+            let text =
+                fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+            let mut mesh =
+                parse_obj(&text).with_context(|| format!("loading {}", path.display()))?;
+            mesh.scale(args.scale);
+            let seams: SeamSet = match &args.seams {
+                Some(p) => {
+                    let t = fs::read_to_string(p)
+                        .with_context(|| format!("reading {}", p.display()))?;
+                    serde_json::from_str(&t).with_context(|| format!("parsing {}", p.display()))?
+                }
+                None => SeamSet::default(),
+            };
+            (mesh, seams, path.display().to_string(), args.up.vec())
+        }
+        (None, None) => unreachable!("clap requires a mesh or a project"),
     };
 
     let ease = match &args.calibration {
@@ -427,7 +462,7 @@ fn flatten(args: FlattenArgs) -> Result<()> {
             max_iterations: args.max_iterations,
             tolerance: args.tolerance,
         },
-        up: args.up.vec(),
+        up,
         seam_matching: (!args.no_seam_matching).then_some(SeamMatching {
             weight: args.seam_weight,
             ..Default::default()
@@ -452,12 +487,7 @@ fn flatten(args: FlattenArgs) -> Result<()> {
         }),
     };
     let out = job::run(&mesh, &seams, &opts)?;
-    write_job(
-        &args.output,
-        &args.mesh.display().to_string(),
-        args.scale,
-        &out,
-    )
+    write_job(&args.output, &source, args.scale, &out)
 }
 
 /// Write a job's files and print its summary tables and warnings.

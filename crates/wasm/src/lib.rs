@@ -19,19 +19,24 @@
 //! { "command": "pattern", "obj": "v ...", "seams": {"seams": [...]}, "scale": 1, "options": { ... } }
 //! { "command": "calibrate", "calibration": { "sheets": [...], "target": ... } }
 //! { "command": "human", "body": { "measurements": {"height": 1680, ...}, "shape": {...} } }
+//! { "command": "garment", "body": {...}, "design": {...}, "pattern": false, "options": {...} }
 //! ```
 //! `options` for `pattern` is a [`JobOptions`] (every field optional).
 //! Responses are `{"ok": true, ...}` or `{"ok": false, "error": "..."}`.
 
 use latexpat_core::body::{torso, BodyMeasurements, BodyOptions};
 use latexpat_core::calibrate::{calibrate, Calibration};
-use latexpat_core::human::{fit, BodyModel, Measurer};
+use latexpat_core::cut::cut_panels;
+use latexpat_core::garment::{build, GarmentDesign};
+use latexpat_core::glam::DVec3;
+use latexpat_core::human::{fit, BodyModel, HumanBody, Measurer};
 use latexpat_core::job::{self, JobOptions};
 use latexpat_core::obj::{parse_obj, write_obj};
 use latexpat_core::project::BodySpec;
 use latexpat_core::SeamSet;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::cell::RefCell;
 use std::sync::OnceLock;
 
 #[derive(Deserialize)]
@@ -59,6 +64,45 @@ enum Request {
         #[serde(default)]
         body: BodySpec,
     },
+    Garment {
+        #[serde(default)]
+        body: BodySpec,
+        #[serde(default)]
+        design: GarmentDesign,
+        /// Also make the pattern (otherwise just the preview).
+        #[serde(default)]
+        pattern: bool,
+        #[serde(default)]
+        options: JobOptions,
+    },
+}
+
+thread_local! {
+    /// The last fitted body, keyed by its spec, so editing a garment does
+    /// not refit the body.
+    static FITTED: RefCell<Option<(String, HumanBody)>> = const { RefCell::new(None) };
+}
+
+fn fitted(spec: &BodySpec) -> Result<HumanBody, String> {
+    let key = serde_json::to_string(spec).map_err(|e| e.to_string())?;
+    if let Some(b) = FITTED.with(|c| {
+        c.borrow()
+            .as_ref()
+            .filter(|(k, _)| *k == key)
+            .map(|(_, b)| b.clone())
+    }) {
+        return Ok(b);
+    }
+    let (model, measurer) = human();
+    let b = fit(model, measurer, &spec.measurements, &spec.shape).map_err(|e| e.to_string())?;
+    FITTED.with(|c| *c.borrow_mut() = Some((key, b.clone())));
+    Ok(b)
+}
+
+fn flat3(points: impl Iterator<Item = DVec3>) -> Vec<f32> {
+    points
+        .flat_map(|p| [p.x as f32, p.y as f32, p.z as f32])
+        .collect()
 }
 
 /// The body model and measurer, loaded once.
@@ -137,6 +181,59 @@ fn run(request: &str) -> Result<Value, String> {
                 "parameters": b.parameters,
                 "iterations": b.iterations,
                 "obj": write_obj(&b.mesh),
+            }))
+        }
+        Request::Garment {
+            body,
+            design,
+            pattern,
+            options,
+        } => {
+            let b = fitted(&body)?;
+            let g = build(&b.mesh, &design).map_err(|e| e.to_string())?;
+            let garment_triangles: Vec<u32> = g
+                .body
+                .triangles()
+                .iter()
+                .zip(&g.region)
+                .filter(|(_, &r)| r)
+                .flat_map(|(t, _)| *t)
+                .collect();
+            let curves: Vec<Value> = g
+                .curves
+                .iter()
+                .map(|c| {
+                    let pts = flat3(c.vertices.iter().map(|&v| g.body.positions()[v as usize]));
+                    json!({ "name": c.name, "kind": c.kind, "closed": c.closed, "points": pts })
+                })
+                .collect();
+            // Can the garment be cut into flat panels as drawn?
+            let panels = g.mesh.as_ref().map(|m| {
+                g.seams
+                    .resolve(m)
+                    .and_then(|e| cut_panels(m, &e))
+                    .map(|p| p.len())
+                    .map_err(|e| e.to_string())
+            });
+            let output = match (&g.mesh, pattern) {
+                (Some(m), true) => {
+                    Some(job::run(m, &g.seams, &options).map_err(|e| e.to_string())?)
+                }
+                (None, true) => {
+                    return Err("draw the garment's edges and click inside it first".into())
+                }
+                _ => None,
+            };
+            Ok(json!({
+                "ok": true,
+                "positions": flat3(g.body.positions().iter().copied()),
+                "triangles": g.body.triangles().iter().flatten().copied().collect::<Vec<u32>>(),
+                "garment_triangles": garment_triangles,
+                "curves": curves,
+                "warnings": g.warnings,
+                "panels": panels.as_ref().and_then(|p| p.as_ref().ok()),
+                "panel_error": panels.as_ref().and_then(|p| p.as_ref().err()),
+                "output": output,
             }))
         }
         Request::Calibrate { calibration } => {
@@ -240,6 +337,32 @@ mod tests {
             r#"{"command": "human", "body": {"measurements": {"elbow": 3}}}"#,
         ));
         assert_eq!(bad["ok"], false);
+    }
+
+    #[test]
+    fn garment_preview_and_pattern() {
+        let project: Value = serde_json::from_str(
+            &std::fs::read_to_string(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/data/top.project.json"
+            ))
+            .unwrap(),
+        )
+        .unwrap();
+        let req = |pattern: bool| {
+            json!({ "command": "garment", "body": project["body"], "design": project["garment"], "pattern": pattern })
+                .to_string()
+        };
+        let preview = parse(&handle(&req(false)));
+        assert_eq!(preview["ok"], true, "{}", preview["error"]);
+        assert_eq!(preview["panels"], 2);
+        assert!(preview["panel_error"].is_null());
+        assert_eq!(preview["curves"].as_array().unwrap().len(), 8);
+        assert!(preview["output"].is_null());
+        let n = preview["garment_triangles"].as_array().unwrap().len();
+        assert!(n > 0 && n.is_multiple_of(3));
+        let full = parse(&handle(&req(true)));
+        assert_eq!(full["output"]["panel_svgs"].as_array().unwrap().len(), 2);
     }
 
     #[test]

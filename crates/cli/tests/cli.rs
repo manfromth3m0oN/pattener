@@ -60,7 +60,9 @@ fn reports_non_disc_panel() {
         .output()
         .unwrap();
     assert!(!o.status.success());
-    assert!(String::from_utf8_lossy(&o.stderr).contains("cannot be laid flat: it still wraps around"));
+    assert!(
+        String::from_utf8_lossy(&o.stderr).contains("cannot be laid flat: it still wraps around")
+    );
 }
 
 #[test]
@@ -307,5 +309,25 @@ fn human_body_from_project() {
     assert!(std::fs::read_to_string(out.join("body.obj"))
         .unwrap()
         .starts_with("v "));
+    std::fs::remove_dir_all(&out).unwrap();
+}
+
+#[test]
+fn flatten_garment_from_project() {
+    let out =
+        std::env::temp_dir().join(format!("latexpat-cli-test-garment-{}", std::process::id()));
+    let o = Command::new(env!("CARGO_BIN_EXE_latexpat"))
+        .arg("flatten")
+        .arg("--project")
+        .arg(data("top.project.json"))
+        .arg("-o")
+        .arg(&out)
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    assert!(out.join("panel_00.svg").exists() && out.join("panel_01.svg").exists());
+    assert!(!out.join("panel_02.svg").exists());
+    // The design has no bust shaping, so the front's seams come out longer.
+    assert!(String::from_utf8_lossy(&o.stderr).contains("easing in"));
     std::fs::remove_dir_all(&out).unwrap();
 }

@@ -469,6 +469,7 @@ dependencies = [
  "faer",
  "glam",
  "serde",
+ "serde_json",
  "thiserror 2.0.21",
 ]
 
