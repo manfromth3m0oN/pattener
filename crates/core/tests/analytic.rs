@@ -14,8 +14,8 @@ fn flatten(mesh: &Mesh, seams: Vec<Vec<u32>>) -> Vec<FlatPanel> {
         seams: seams
             .into_iter()
             .map(|v| Seam {
-                name: None,
                 vertices: v,
+                ..Default::default()
             })
             .collect(),
     };
@@ -23,7 +23,7 @@ fn flatten(mesh: &Mesh, seams: Vec<Vec<u32>>) -> Vec<FlatPanel> {
         ease: Ease::Uniform(S),
         ..Default::default()
     };
-    flatten_garment(mesh, &set, &opts).expect("flatten")
+    flatten_garment(mesh, &set, &opts).expect("flatten").panels
 }
 
 /// Property check shared by every test mesh: positive flat areas, no flips.

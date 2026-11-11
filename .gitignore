@@ -1,2 +1,5 @@
 target/
 out/
+web/latexpat.wasm
+node_modules/
+_site/
