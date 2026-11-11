@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>latexpat: latex garment patterns</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>latexpat</h1>
+  <p>Sewing-free patterns for latex garments: from measurements or a 3D body to printable, glue-ready pieces. Everything runs in your browser.</p>
+</header>
+
+<main>
+  <section>
+    <h2>1. Body</h2>
+    <div class="tabs" role="radiogroup">
+      <label><input type="radio" name="source" value="measure" checked> From measurements</label>
+      <label><input type="radio" name="source" value="upload"> Upload a mesh</label>
+    </div>
+
+    <div id="measure-panel">
+      <p class="hint">Bottom to top. Heights are above the lowest level, all in millimetres. Front bias above 0.5 adds bust or belly projection.</p>
+      <table id="levels">
+        <thead><tr><th>Level</th><th>Height</th><th>Circumference</th><th>Depth ratio</th><th>Front bias</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <button type="button" id="add-level">Add level</button>
+      <label>Seams
+        <select id="style">
+          <option value="princess">Princess lines (6 panels)</option>
+          <option value="tube">Side seams only (2 panels)</option>
+        </select>
+      </label>
+    </div>
+
+    <div id="upload-panel" hidden>
+      <label>Mesh (.obj) <input type="file" id="obj-file" accept=".obj"></label>
+      <label>Seams (.json) <input type="file" id="seams-file" accept=".json"></label>
+      <label>Scale to mm <input type="number" id="scale" value="1" step="any" min="0"></label>
+      <label>Up axis
+        <select id="up"><option value="0,1,0">Y</option><option value="0,0,1">Z</option><option value="1,0,0">X</option></select>
+      </label>
+    </div>
+  </section>
+
+  <section>
+    <h2>2. Latex and pattern</h2>
+    <div class="grid">
+      <label>Ease <input type="number" id="ease" value="0.85" step="0.01" min="0.5" max="1"></label>
+      <label>Glue allowance (mm) <input type="number" id="allowance" value="6" step="1" min="0"></label>
+      <label>Allowance on
+        <select id="allowance-side"><option>left</option><option>right</option><option>both</option><option>none</option></select>
+      </label>
+      <label>Hem allowance (mm) <input type="number" id="hem" value="0" step="1" min="0"></label>
+      <label>Notch spacing (mm) <input type="number" id="notch" value="50" step="5" min="0"></label>
+      <label>Heatmap
+        <select id="heatmap"><option value="">none</option><option value="max_stretch">max stretch</option><option value="area_stretch">area stretch</option></select>
+      </label>
+      <label>Sheet width (mm, optional) <input type="number" id="sheet-width" placeholder="e.g. 1000" min="0"></label>
+      <label class="check"><input type="checkbox" id="match" checked> Match seam lengths</label>
+    </div>
+    <details>
+      <summary>Swatch calibration (optional)</summary>
+      <p class="hint">A calibration file from <code>latexpat calibrate</code> sets the ease from your own stretch tests instead of the value above.</p>
+      <label>Calibration (.json) <input type="file" id="calib-file" accept=".json"></label>
+      <label>Sheet (name or thickness, e.g. 0.4mm) <input type="text" id="calib-sheet"></label>
+    </details>
+  </section>
+
+  <section>
+    <button type="button" id="run" class="primary">Make pattern</button>
+    <span id="status" role="status"></span>
+  </section>
+
+  <section id="results" hidden>
+    <h2>3. Pattern</h2>
+    <ul id="warnings"></ul>
+    <div id="downloads"></div>
+    <h3>Panels</h3>
+    <table id="panel-table"></table>
+    <h3>Seams</h3>
+    <table id="seam-table"></table>
+    <div id="layout"></div>
+    <div id="pieces" class="pieces"></div>
+    <p class="hint">Print SVGs at 100 % and check the 50 mm scale bar. Mark notches with a pen; snipping latex starts tears.</p>
+  </section>
+</main>
+<script src="app.js"></script>
+</body>
+</html>
