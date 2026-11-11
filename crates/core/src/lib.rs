@@ -16,7 +16,9 @@
 //! This crate does no file I/O and spawns no threads, so it can be
 //! compiled to WebAssembly.
 
+pub mod arap;
 pub mod cut;
+pub mod ease;
 pub mod error;
 pub mod linalg;
 pub mod lscm;
