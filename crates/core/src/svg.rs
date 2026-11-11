@@ -18,6 +18,7 @@
 //! interpolated linearly in sRGB.
 
 use crate::flatten::FlatPanel;
+use crate::nest::Layout;
 use crate::pattern::PatternPiece;
 use crate::strain::PrincipalStretch;
 use glam::DVec2;
@@ -289,6 +290,57 @@ pub fn panel_svg(fp: &FlatPanel, piece: &PatternPiece, opts: &SvgOptions) -> Str
             r#"<text x="{lx:.3}" y="{:.3}" font-family="sans-serif" font-size="3">{}</text>"#,
             fy + 4.0,
             metric.label()
+        );
+    }
+    let _ = writeln!(s, "</svg>");
+    s
+}
+
+/// Render a sheet layout: every piece's cut line at its placement, the
+/// sheet edges, and the length used. 1:1 scale in mm; `y` runs along the
+/// roll (down the page), pieces keep the outside-facing orientation of the
+/// individual panel SVGs.
+pub fn layout_svg(outlines: &[Vec<DVec2>], labels: &[String], layout: &Layout) -> String {
+    let m = 10.0;
+    let header = 8.0;
+    let (w, l) = (layout.sheet_width, layout.length);
+    let (vw, vh) = (w + 2.0 * m, l + 2.0 * m + header);
+    let flip = |p: DVec2| DVec2::new(p.x, l - p.y);
+    let mut s = String::new();
+    let _ = writeln!(s, r#"<?xml version="1.0" encoding="UTF-8"?>"#);
+    let _ = writeln!(
+        s,
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{vw:.3}mm" height="{vh:.3}mm" viewBox="{:.3} {:.3} {vw:.3} {vh:.3}">"#,
+        -m,
+        -m - header
+    );
+    let _ = writeln!(
+        s,
+        r#"<text x="0" y="{:.3}" font-family="sans-serif" font-size="5">sheet {w:.0} mm wide, {l:.0} mm used ({:.0}% of the area)</text>"#,
+        -m - header + 5.5,
+        100.0 * layout.utilisation
+    );
+    let _ = writeln!(
+        s,
+        r#"<path id="sheet" d="M0 {:.3}V{:.3}M{w:.3} {:.3}V{:.3}M0 {l:.3}H{w:.3}" stroke="gray" stroke-width="0.4" stroke-dasharray="6 3" fill="none"/>"#,
+        -m,
+        l + m,
+        -m,
+        l + m
+    );
+    for (pl, label) in layout.placements.iter().zip(labels) {
+        let pts: Vec<DVec2> = outlines[pl.piece]
+            .iter()
+            .map(|&p| flip(pl.apply(p)))
+            .collect();
+        let c = pts.iter().fold(DVec2::ZERO, |a, p| a + *p) / pts.len() as f64;
+        let _ = writeln!(
+            s,
+            r#"<path d="{}" fill="none" stroke="black" stroke-width="0.3"/><text x="{:.3}" y="{:.3}" font-family="sans-serif" font-size="6" text-anchor="middle">{}</text>"#,
+            closed_path(&pts),
+            c.x,
+            c.y,
+            escape(label)
         );
     }
     let _ = writeln!(s, "</svg>");

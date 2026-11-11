@@ -35,6 +35,7 @@ pub mod flatten;
 pub mod linalg;
 pub mod lscm;
 pub mod mesh;
+pub mod nest;
 pub mod obj;
 pub mod panel;
 pub mod pattern;

@@ -62,6 +62,18 @@ pub enum Error {
     #[error("ease: {0}")]
     InvalidEase(String),
 
+    /// A piece is wider than the sheet in every allowed orientation.
+    #[error(
+        "piece {piece} ({width:.0} × {height:.0} mm) does not fit a {sheet_width:.0} mm sheet; \
+         allow rotation, use a wider sheet, or add a seam to split it"
+    )]
+    PieceTooWide {
+        piece: usize,
+        width: f64,
+        height: f64,
+        sheet_width: f64,
+    },
+
     /// A sparse linear solve failed (usually a degenerate panel).
     #[error("linear solve failed: {0}")]
     Solve(String),
