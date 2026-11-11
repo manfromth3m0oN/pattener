@@ -78,15 +78,19 @@ const done = (p) => p.waitForFunction(
   // Drag the hem's most frontal point down: it moves, no point is added,
   // and the view does not turn.
   await page.locator('#g-curves li').first().click();
+  // Selecting the curve can scroll the page (the list is below the view),
+  // so measure the view again before dragging on it.
+  await page.locator('#viewer').scrollIntoViewIfNeeded();
+  const dbox = await page.locator('#viewer').boundingBox();
   const t = await page.evaluate(() => {
     const pts = design.curves[active].points.map((sp, i) => ({ i, q: pointOf(sp) }));
     pts.sort((a, b) => b.q[2] - a.q[2]);
     const s = viewer.project(pts[0].q);
     return { i: pts[0].i, x: s.x, y: s.y, y3: pts[0].q[1], n: pts.length, yaw: viewer.yaw };
   });
-  await page.mouse.move(box.x + t.x, box.y + t.y);
+  await page.mouse.move(dbox.x + t.x, dbox.y + t.y);
   await page.mouse.down();
-  for (let k = 1; k <= 8; k++) await page.mouse.move(box.x + t.x, box.y + t.y + 5 * k);
+  for (let k = 1; k <= 8; k++) await page.mouse.move(dbox.x + t.x, dbox.y + t.y + 5 * k);
   await page.mouse.up();
   const moved = await page.evaluate((i) => ({ y3: pointOf(design.curves[active].points[i])[1], n: design.curves[active].points.length, yaw: viewer.yaw }), t.i);
   assert.ok(moved.y3 < t.y3 - 20, `dragged point should move down: ${t.y3} -> ${moved.y3}`);
@@ -134,6 +138,8 @@ const done = (p) => p.waitForFunction(
   assert.match(await page.textContent('#status'), /Done .*2 panels/);
   assert.ok(await page.isVisible('#pressure-panel'));
   assert.match(await page.locator('#panel-table').innerText(), /mmHg/);
+  // The cut-on top strains at the armpits: a hint says so.
+  assert.match(await page.locator('#warnings').innerText(), /distort by about \d+ %/);
   // The top is built symmetric: both pieces are symmetric about the centre.
   assert.equal((await page.locator('#panel-table').innerText()).match(/\(symmetric\)/g).length, 2);
   // One layout per sheet, with a materials list.

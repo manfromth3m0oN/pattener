@@ -1381,6 +1381,12 @@ pub(crate) mod tests {
     use crate::job::{run, JobOptions};
 
     /// The default body and its tape loops.
+    pub(crate) fn fitted() -> crate::human::HumanBody {
+        let m = test_model();
+        let me = Measurer::new(&m).unwrap();
+        fit(&m, &me, &Measurements::new(), &ShapeOptions::default()).unwrap()
+    }
+
     pub(crate) fn body() -> (Mesh, Vec<(MeasureKind, Vec<DVec3>)>) {
         let m = test_model();
         let me = Measurer::new(&m).unwrap();
@@ -1699,9 +1705,10 @@ pub(crate) mod tests {
     #[test]
     fn every_template_makes_its_pieces() {
         use super::examples::TEMPLATES;
-        let (mesh, tapes) = body();
-        for (t, pieces) in TEMPLATES.iter().zip([2, 2, 4, 4]) {
-            let g = build(&mesh, &(t.build)(&mesh, &tapes)).unwrap();
+        let fitted = fitted();
+        let mesh = &fitted.mesh;
+        for (t, pieces) in TEMPLATES.iter().zip([2, 4, 4, 4, 2, 4, 7, 4]) {
+            let g = build(mesh, &(t.build)(&fitted)).unwrap();
             assert!(g.warnings.is_empty(), "{}: {:?}", t.id, g.warnings);
             // Evenly triangulated: no slivers.
             let gm = g.mesh.as_ref().unwrap();
@@ -1739,8 +1746,8 @@ pub(crate) mod tests {
             let faces = panel_faces(&g).unwrap();
             let sizes: Vec<usize> = faces.iter().map(|f| f.len()).collect();
             assert_eq!(sizes.len(), pieces, "{}: piece sizes {sizes:?}", t.id);
-            // No slivers where seams meet.
-            assert!(sizes.iter().all(|&n| n > 100), "{}: {sizes:?}", t.id);
+            // No slivers where seams meet (a gusset is small but real).
+            assert!(sizes.iter().all(|&n| n > 30), "{}: {sizes:?}", t.id);
         }
     }
 
@@ -1782,6 +1789,86 @@ pub(crate) mod tests {
                 assert!((s1.p95_stretch - s2.p95_stretch).abs() < 1e-9);
             }
         }
+    }
+
+    #[test]
+    fn darts_open_into_wedges_and_strain_hints_point_at_the_bust() {
+        use super::examples::{cincher, top_set_in};
+        use crate::job::{run, JobOptions};
+        use crate::seams::SeamFinish;
+        let fitted = fitted();
+        let mesh = &fitted.mesh;
+        let tapes = &fitted.tapes;
+        let job = |design: &GarmentDesign| {
+            let g = build(mesh, design).unwrap();
+            let opts = JobOptions {
+                mirror: g.mirror.clone(),
+                length_relief: 0.4,
+                ..Default::default()
+            };
+            (
+                g.clone(),
+                run(g.mesh.as_ref().unwrap(), &g.seams, &opts).unwrap(),
+            )
+        };
+        // The cincher lies flat: no hints.
+        let (_, out) = job(&cincher(mesh, tapes));
+        assert!(out.report.panels.iter().all(|p| p.strain_hint.is_none()));
+        // The set-in top's front strains at the bust.
+        let plain = top_set_in(&fitted);
+        let (_, out) = job(&plain);
+        let front = &out.report.panels[0];
+        let hint = front.strain_hint.expect("a hint on the front");
+        let bust = tapes.iter().find(|t| t.0 == MeasureKind::Bust).unwrap();
+        let apex = bust
+            .1
+            .iter()
+            .copied()
+            .max_by(|a, b| a.z.total_cmp(&b.z))
+            .unwrap();
+        assert!(
+            (hint[1] - apex.y).abs() < 80.0 && hint[2] > 100.0,
+            "hint {hint:?}, bust apex {apex}"
+        );
+        // A side bust dart: from the side seam to just short of the bust
+        // point. It stays one front piece, opens into a wedge, and eases
+        // the strain there.
+        let side = bust
+            .1
+            .iter()
+            .copied()
+            .max_by(|a, b| a.x.total_cmp(&b.x))
+            .unwrap();
+        let tip = bust
+            .1
+            .iter()
+            .copied()
+            .filter(|p| p.x > 20.0)
+            .max_by(|a, b| a.z.total_cmp(&b.z))
+            .unwrap();
+        let at = |p: DVec3| locate(mesh.positions(), mesh.triangles(), p);
+        let mut darted = plain.clone();
+        darted.curves.push(Curve {
+            name: "bust dart".into(),
+            kind: CurveKind::Seam,
+            points: vec![at(side - 15.0 * DVec3::Y), at(side.lerp(tip, 0.8))],
+            mirror: true,
+            seam_finish: SeamFinish::Glued,
+            ..Default::default()
+        });
+        let (g, out2) = job(&darted);
+        assert_eq!(panel_faces(&g).unwrap().len(), 4);
+        let dart = out2
+            .report
+            .seams
+            .iter()
+            .find(|s| s.seam.starts_with("bust dart"))
+            .expect("the dart is a seam");
+        assert_eq!(
+            dart.left_panel, dart.right_panel,
+            "a dart joins a piece to itself"
+        );
+        assert!(out2.report.panels[0].strain_spread < front.strain_spread);
     }
 
     #[test]

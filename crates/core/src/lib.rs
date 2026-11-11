@@ -37,6 +37,7 @@ pub mod error;
 pub mod fitmap;
 pub mod flatten;
 pub mod garment;
+pub mod hints;
 pub mod human;
 pub mod job;
 pub mod linalg;

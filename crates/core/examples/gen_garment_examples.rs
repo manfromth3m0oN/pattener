@@ -48,7 +48,7 @@ fn main() {
         let project = Project {
             name: t.name.into(),
             body: BodySpec::default(),
-            garment: (t.build)(&body.mesh, &body.tapes),
+            garment: (t.build)(&body),
             materials: materials.clone(),
             ..Default::default()
         };
