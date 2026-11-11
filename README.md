@@ -132,19 +132,39 @@ body. The pressure map still uses the real body. Set it with
 ### Templates
 
 **Start from template** replaces the garment with one of these starting
-designs, built from the body's tape loops so they follow your measurements:
+designs, built from the body's tape loops and skeleton so they follow your
+measurements. The tops show the common ways of shaping a sleeve and a bust:
 
 | Template | Pieces | Construction |
 |---|---|---|
-| Short-sleeved top | front, back | shoulder and side seams; trimmed neckline, folded hem |
+| Short-sleeved top (cut-on sleeves) | front, back | sleeves cut in one with the body; shoulder and side seams |
+| Top with set-in sleeves | front, back, 2 sleeves | sleeves set into round armholes, underarm seams |
+| Raglan top | front, back, 2 sleeves | diagonal seams from the neckline to the armpits |
+| Princess-seam top | centre front, 2 side fronts, back | princess seams over the bust |
 | Leggings | one per leg | centre front and back, inside leg; folded waist |
-| Catsuit | left and right front and back | back zip from neck to crotch, seams over and under the arms, down the sides and inside legs; trimmed neckline |
+| Catsuit | left and right front and back | back zip; seams over and under the arms, down the sides and inside legs |
+| Catsuit with set-in sleeves and gusset | 2 fronts, 2 backs, 2 sleeves, gusset | set-in sleeves; an oval crotch gusset where the centre and inside-leg seams meet; back zip |
 | Waist cincher | left and right front and back | back zip, side seams; trimmed top and bottom |
 
 Every curve stays editable: move points, add seams, change finishes.
 `cargo run -p latexpat-core --features serde,bundled-body --example
 gen_garment_examples` regenerates `web/examples/` from
 `garment::examples::TEMPLATES`.
+
+### Where a piece strains
+
+A flat sheet can only follow a surface that curves one way at a time.
+Where the body curves both ways (bust, buttocks, shoulder, armpit), a piece
+with no dart or seam there is distorted instead. For each piece the app
+finds its worst 6 cm patch: the average of how far each triangle is from
+the shape the ease asks for (`max |ln s|` over its principal stretches).
+Above 10 %, the report says so, and the web app marks the spot on the body
+with a red ring. The fix is a dart or seam from the nearest edge towards
+the ring, or a set-in sleeve at an armpit.
+
+On the templates, the cut-on top is marked at the armpits. The set-in and
+raglan tops are marked at the bust: they need darts or princess seams
+there. The cincher has no marks.
 
 ### Construction and printing
 

@@ -133,6 +133,10 @@ pub struct Garment {
     /// Per panel, the panel it is the mirror image of (itself for a
     /// symmetric panel on the centre line), for a symmetric garment.
     pub mirrored: Vec<Option<usize>>,
+    /// Per panel and triangle, how far the flat triangle is from its eased
+    /// reference shape: `max |ln sᵢ|` over the principal stretches of the
+    /// map from the reference to the flat triangle (see [`crate::hints`]).
+    pub area_misfit: Vec<Vec<f64>>,
 }
 
 /// Body smoothing scale `σ` (mm) used by pattern jobs by default.
@@ -451,10 +455,50 @@ pub fn flatten_garment(mesh: &Mesh, seams: &SeamSet, opts: &FlattenOptions) -> R
             }
         })
         .collect();
+    let area_misfit = flat
+        .iter()
+        .zip(&eases)
+        .map(|(fp, refs)| {
+            fp.panel
+                .triangles
+                .iter()
+                .zip(refs)
+                .map(|(t, r)| {
+                    // The linear map from the reference triangle to the flat
+                    // one, and its principal stretches s₁ ≥ s₂.
+                    let [a, b, c] = t.map(|i| fp.uv[i as usize]);
+                    let (f1, f2) = (b - a, c - a);
+                    let (r1, r2) = (r[1] - r[0], r[2] - r[0]);
+                    let det = r1.perp_dot(r2);
+                    if det.abs() < 1e-12 {
+                        return 0.0;
+                    }
+                    // A = [f1 f2] · [r1 r2]⁻¹
+                    let inv = [[r2.y / det, -r2.x / det], [-r1.y / det, r1.x / det]];
+                    let m = [
+                        [
+                            f1.x * inv[0][0] + f2.x * inv[1][0],
+                            f1.x * inv[0][1] + f2.x * inv[1][1],
+                        ],
+                        [
+                            f1.y * inv[0][0] + f2.y * inv[1][0],
+                            f1.y * inv[0][1] + f2.y * inv[1][1],
+                        ],
+                    ];
+                    let (e, f) = (0.5 * (m[0][0] + m[1][1]), 0.5 * (m[0][0] - m[1][1]));
+                    let (g, h) = (0.5 * (m[1][0] + m[0][1]), 0.5 * (m[1][0] - m[0][1]));
+                    let (q, rr) = ((e * e + h * h).sqrt(), (f * f + g * g).sqrt());
+                    let (s1, s2) = (q + rr, (q - rr).abs().max(1e-12));
+                    s1.ln().abs().max(s2.ln().abs())
+                })
+                .collect()
+        })
+        .collect();
     Ok(Garment {
         panels: flat,
         seams,
         mirrored,
+        area_misfit,
     })
 }
 

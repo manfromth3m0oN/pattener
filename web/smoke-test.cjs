@@ -134,6 +134,8 @@ const done = (p) => p.waitForFunction(
   assert.match(await page.textContent('#status'), /Done .*2 panels/);
   assert.ok(await page.isVisible('#pressure-panel'));
   assert.match(await page.locator('#panel-table').innerText(), /mmHg/);
+  // The cut-on top strains at the armpits: a hint says so.
+  assert.match(await page.locator('#warnings').innerText(), /distort by about \d+ %/);
   // The top is built symmetric: both pieces are symmetric about the centre.
   assert.equal((await page.locator('#panel-table').innerText()).match(/\(symmetric\)/g).length, 2);
   // One layout per sheet, with a materials list.

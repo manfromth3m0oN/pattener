@@ -1,8 +1,23 @@
 [
   {
-    "description": "Front and back joined at the shoulders and sides; trimmed neckline, folded hem at the hips.",
+    "description": "Front and back with the sleeves cut in one with the body, joined at the shoulders and sides; trimmed neckline, folded hem at the hips. The simplest construction; the front has no bust shaping.",
     "id": "top",
-    "name": "Short-sleeved top"
+    "name": "Short-sleeved top (cut-on sleeves)"
+  },
+  {
+    "description": "Front, back and two tube sleeves set into round armholes, with an underarm seam on each sleeve; the usual construction for a fitted top.",
+    "id": "top-set-in",
+    "name": "Top with set-in sleeves"
+  },
+  {
+    "description": "Diagonal raglan seams from the neckline to the armpits, so each sleeve includes the top of the shoulder; easy to fit across the shoulders.",
+    "id": "top-raglan",
+    "name": "Raglan top"
+  },
+  {
+    "description": "Cut-on sleeves with princess seams from the shoulders over the bust to the hem: a centre front and two side fronts that shape the bust.",
+    "id": "top-princess",
+    "name": "Princess-seam top"
   },
   {
     "description": "One piece per leg, joined at centre front and back, with an inside-leg seam; folded waist hem.",
@@ -13,6 +28,11 @@
     "description": "Neck to wrists and ankles in four pieces, with a back zip from neck to crotch and seams over and under the arms, down the sides and the inside legs.",
     "id": "catsuit",
     "name": "Catsuit"
+  },
+  {
+    "description": "Left and right fronts and backs, two set-in sleeves and a diamond crotch gusset where the centre and inside-leg seams meet; back zip.",
+    "id": "catsuit-set-in",
+    "name": "Catsuit with set-in sleeves and gusset"
   },
   {
     "description": "Underbust to hips in four pieces with a back zip; both edges trimmed.",

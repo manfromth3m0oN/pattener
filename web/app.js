@@ -297,14 +297,15 @@ async function refreshGarment() {
         triangles: new Uint32Array(p.triangles), color: hexToRgb(p.color),
       }));
       viewer?.setMesh(new Float32Array(r.positions), new Uint32Array(r.triangles), new Uint32Array(r.garment_triangles), null, pieces);
-      viewer?.setLines([
+      lastLines = [
         ...r.curves.map((c) => ({
           points: new Float32Array(c.points),
           closed: c.closed,
           color: c.kind === 'edge' ? EDGE_COLOR : SEAM_COLOR,
         })),
         ...zoneLoops(r.zones),
-      ]);
+      ];
+      viewer?.setLines(lastLines);
       $('g-warnings').replaceChildren(...r.warnings.map((w) => Object.assign(document.createElement('li'), { textContent: w })));
       if (r.panel_error) {
         status.className = 'error';
@@ -491,6 +492,23 @@ function renderZones() {
 }
 
 // Three great circles per zone, so its extent reads from any angle.
+let lastLines = [];
+// Red rings where pieces strain (report.panels[].strain_hint); a symmetric
+// piece is marked on both sides.
+const HINT_COLOR = [0.85, 0.1, 0.1];
+function hintLoops(panels) {
+  const zones = [];
+  for (const p of panels) {
+    if (!p.strain_hint) continue;
+    zones.push({ center: p.strain_hint, radius_mm: 30 });
+    if (p.mirror_of === p.index) {
+      const [x, y, z] = p.strain_hint;
+      zones.push({ center: [-x, y, z], radius_mm: 30 });
+    }
+  }
+  return zoneLoops(zones).map((l) => ({ ...l, color: HINT_COLOR }));
+}
+
 function zoneLoops(zones) {
   const loops = [];
   for (const z of zones) {
@@ -887,6 +905,7 @@ async function run() {
       };
       $('pressure-panel').hidden = false;
       showFit();
+      viewer?.setLines([...lastLines, ...hintLoops(res.output.report.panels)]);
     }
     status.textContent = `Done in ${f((performance.now() - t0) / 1000, 1)} s: ${res.output.report.panels.length} panels.`;
   } catch (e) {

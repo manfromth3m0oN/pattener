@@ -6,7 +6,8 @@
 
 use super::edit::locate;
 use super::{Curve, CurveKind, GarmentDesign, SurfacePoint};
-use crate::human::MeasureKind;
+use crate::human::slice::{nearest_section, Plane};
+use crate::human::{HumanBody, MeasureKind};
 use crate::mesh::Mesh;
 use crate::pattern::EdgeFinish;
 use crate::seams::SeamFinish;
@@ -26,6 +27,32 @@ fn ring(mesh: &Mesh, loop_: &[DVec3], n: usize) -> Vec<SurfacePoint> {
                 loop_[i * loop_.len() / n],
             )
         })
+        .collect()
+}
+
+/// `n` evenly spaced points of a closed loop starting at the first anchor,
+/// with the sample nearest each other anchor moved onto it.
+fn ring_through(mesh: &Mesh, loop_: &[DVec3], n: usize, anchors: &[DVec3]) -> Vec<SurfacePoint> {
+    let m = loop_.len();
+    let index_of = |p: DVec3| {
+        (0..m)
+            .min_by(|&a, &b| loop_[a].distance(p).total_cmp(&loop_[b].distance(p)))
+            .expect("loop")
+    };
+    let start = anchors.first().map_or(0, |&p| index_of(p));
+    let mut idx: Vec<usize> = (0..n).map(|i| (start + i * m / n) % m).collect();
+    for &p in anchors.iter().skip(1) {
+        let a = index_of(p);
+        let k = (1..n)
+            .min_by_key(|&i| {
+                let d = (idx[i] as isize - a as isize).rem_euclid(m as isize) as usize;
+                d.min(m - d)
+            })
+            .expect("points");
+        idx[k] = a;
+    }
+    idx.iter()
+        .map(|&i| locate(mesh.positions(), mesh.triangles(), loop_[i]))
         .collect()
 }
 
@@ -108,25 +135,47 @@ pub struct Template {
     pub id: &'static str,
     pub name: &'static str,
     pub description: &'static str,
-    /// Builds the design from a fitted body's mesh and tapes.
-    pub build: fn(&Mesh, &[Tape]) -> GarmentDesign,
+    /// Builds the design from a fitted body.
+    pub build: fn(&HumanBody) -> GarmentDesign,
 }
 
 /// The template library.
-pub const TEMPLATES: [Template; 4] = [
+pub const TEMPLATES: [Template; 8] = [
     Template {
         id: "top",
-        name: "Short-sleeved top",
-        description: "Front and back joined at the shoulders and sides; trimmed neckline, \
-                      folded hem at the hips.",
-        build: top_finished,
+        name: "Short-sleeved top (cut-on sleeves)",
+        description: "Front and back with the sleeves cut in one with the body, joined at the \
+                      shoulders and sides; trimmed neckline, folded hem at the hips. The \
+                      simplest construction; the front has no bust shaping.",
+        build: |b| top_finished(&b.mesh, &b.tapes),
+    },
+    Template {
+        id: "top-set-in",
+        name: "Top with set-in sleeves",
+        description: "Front, back and two tube sleeves set into round armholes, with an \
+                      underarm seam on each sleeve; the usual construction for a fitted top.",
+        build: top_set_in,
+    },
+    Template {
+        id: "top-raglan",
+        name: "Raglan top",
+        description: "Diagonal raglan seams from the neckline to the armpits, so each sleeve \
+                      includes the top of the shoulder; easy to fit across the shoulders.",
+        build: top_raglan,
+    },
+    Template {
+        id: "top-princess",
+        name: "Princess-seam top",
+        description: "Cut-on sleeves with princess seams from the shoulders over the bust \
+                      to the hem: a centre front and two side fronts that shape the bust.",
+        build: top_princess,
     },
     Template {
         id: "leggings",
         name: "Leggings",
         description: "One piece per leg, joined at centre front and back, with an inside-leg \
                       seam; folded waist hem.",
-        build: leggings,
+        build: |b| leggings(&b.mesh, &b.tapes),
     },
     Template {
         id: "catsuit",
@@ -134,13 +183,20 @@ pub const TEMPLATES: [Template; 4] = [
         description: "Neck to wrists and ankles in four pieces, with a back zip from neck to \
                       crotch and seams over and under the arms, down the sides and the inside \
                       legs.",
-        build: catsuit,
+        build: |b| catsuit(&b.mesh, &b.tapes),
+    },
+    Template {
+        id: "catsuit-set-in",
+        name: "Catsuit with set-in sleeves and gusset",
+        description: "Left and right fronts and backs, two set-in sleeves and a diamond \
+                      crotch gusset where the centre and inside-leg seams meet; back zip.",
+        build: catsuit_set_in,
     },
     Template {
         id: "cincher",
         name: "Waist cincher",
         description: "Underbust to hips in four pieces with a back zip; both edges trimmed.",
-        build: cincher,
+        build: |b| cincher(&b.mesh, &b.tapes),
     },
 ];
 
@@ -208,6 +264,11 @@ impl Landmarks<'_> {
     fn ring(&self, k: MeasureKind, n: usize) -> Vec<SurfacePoint> {
         ring(self.mesh, self.tape(k), n)
     }
+    /// `n` points round tape `k` that include the given points of it
+    /// exactly, so seams ending there meet the edge cleanly.
+    fn ring_through(&self, k: MeasureKind, n: usize, anchors: &[DVec3]) -> Vec<SurfacePoint> {
+        ring_through(self.mesh, self.tape(k), n, anchors)
+    }
     fn points(&self, ps: &[DVec3]) -> Vec<SurfacePoint> {
         ps.iter().map(|&p| self.at(p)).collect()
     }
@@ -266,7 +327,12 @@ pub fn leggings(mesh: &Mesh, tapes: &[(MeasureKind, Vec<DVec3>)]) -> GarmentDesi
     GarmentDesign {
         curves: vec![
             edge("waist", b.ring(Waist, 12), false, Some(HEM)),
-            edge("ankle", b.ring(Ankle, 8), true, Some(EdgeFinish::Raw)),
+            edge(
+                "ankle",
+                b.ring_through(Ankle, 8, &[b.leg(Ankle, false)]),
+                true,
+                Some(EdgeFinish::Raw),
+            ),
             seam(
                 "centre front",
                 b.points(&[b.centre(Waist, true), b.centre(Hips, true), crotch]),
@@ -312,8 +378,18 @@ pub fn catsuit(mesh: &Mesh, tapes: &[(MeasureKind, Vec<DVec3>)]) -> GarmentDesig
     GarmentDesign {
         curves: vec![
             edge("neckline", b.ring(Neck, 10), false, Some(TRIM)),
-            edge("wrist", b.ring(Wrist, 8), true, Some(EdgeFinish::Raw)),
-            edge("ankle", b.ring(Ankle, 8), true, Some(EdgeFinish::Raw)),
+            edge(
+                "wrist",
+                b.ring_through(Wrist, 8, &[b.arm(Wrist, false), b.arm(Wrist, true)]),
+                true,
+                Some(EdgeFinish::Raw),
+            ),
+            edge(
+                "ankle",
+                b.ring_through(Ankle, 8, &[b.leg(Ankle, false), b.leg(Ankle, true)]),
+                true,
+                Some(EdgeFinish::Raw),
+            ),
             seam("centre front", torso(true), false, SeamFinish::Glued),
             seam("centre back", torso(false), false, SeamFinish::Zip),
             seam(
@@ -379,5 +455,309 @@ pub fn cincher(mesh: &Mesh, tapes: &[(MeasureKind, Vec<DVec3>)]) -> GarmentDesig
         // Front, between the centre and the side.
         inside: Some(b.at(extreme(b.tape(Waist), |p| p.z + 0.5 * p.x))),
         ..Default::default()
+    }
+}
+
+/// Landmarks that need the skeleton too.
+struct Skeleton<'a> {
+    b: Landmarks<'a>,
+    body: &'a HumanBody,
+}
+
+impl<'a> Skeleton<'a> {
+    fn new(body: &'a HumanBody) -> Self {
+        Self {
+            b: Landmarks {
+                mesh: &body.mesh,
+                tapes: &body.tapes,
+            },
+            body,
+        }
+    }
+    fn joint(&self, name: &str) -> DVec3 {
+        self.body
+            .joints
+            .iter()
+            .find(|j| j.0 == name)
+            .map(|j| j.1)
+            .expect("joint")
+    }
+    /// The +X armhole: the body's section by the vertical plane just inside
+    /// the shoulder joint, around the top of the arm (front crease,
+    /// armpit, back crease, top of the shoulder).
+    fn armhole(&self) -> Vec<DVec3> {
+        let s = self.joint("l-shoulder");
+        let plane = Plane {
+            point: s - 10.0 * DVec3::X,
+            normal: DVec3::X,
+        };
+        nearest_section(self.b.mesh.positions(), self.b.mesh.triangles(), &plane)
+            .expect("armhole section")
+            .points
+    }
+    /// Ten points round the armhole, starting at the armpit and including
+    /// the top of the shoulder, so the seams that end there meet it exactly.
+    fn armhole_ring(&self) -> Vec<SurfacePoint> {
+        let loop_ = self.armhole();
+        let n = loop_.len();
+        let lowest = |key: &dyn Fn(&DVec3) -> f64| {
+            (0..n)
+                .min_by(|&a, &b| key(&loop_[a]).total_cmp(&key(&loop_[b])))
+                .expect("loop")
+        };
+        let pit = lowest(&|p| p.y);
+        let tip = lowest(&|p| -p.y);
+        let mut idx: Vec<usize> = (0..10).map(|i| (pit + i * n / 10) % n).collect();
+        let near_tip = (0..10)
+            .min_by_key(|&i| {
+                let d = (idx[i] as isize - tip as isize).rem_euclid(n as isize) as usize;
+                d.min(n - d)
+            })
+            .expect("ten points");
+        idx[near_tip] = tip;
+        idx.iter().map(|&i| self.b.at(loop_[i])).collect()
+    }
+    fn armpit(&self) -> DVec3 {
+        extreme(&self.armhole(), |p| -p.y)
+    }
+    fn shoulder_tip(&self) -> DVec3 {
+        extreme(&self.armhole(), |p| p.y)
+    }
+}
+
+/// A short-sleeved top with set-in sleeves.
+pub fn top_set_in(body: &HumanBody) -> GarmentDesign {
+    use MeasureKind::*;
+    let k = Skeleton::new(body);
+    let b = &k.b;
+    let (pit, tip) = (k.armpit(), k.shoulder_tip());
+    GarmentDesign {
+        curves: vec![
+            edge("hem", b.ring(Hips, 12), false, Some(HEM)),
+            edge("neckline", b.ring(Neck, 10), false, Some(TRIM)),
+            edge(
+                "sleeve",
+                b.ring_through(UpperArm, 8, &[b.arm(UpperArm, false)]),
+                true,
+                Some(EdgeFinish::Raw),
+            ),
+            seam("armhole", k.armhole_ring(), true, SeamFinish::Glued).closed_loop(),
+            seam(
+                "side",
+                b.points(&[
+                    b.side(Hips),
+                    b.side(Waist),
+                    b.side(Underbust),
+                    b.side(Bust),
+                    pit,
+                ]),
+                true,
+                SeamFinish::Glued,
+            ),
+            seam(
+                "shoulder",
+                b.points(&[b.side(Neck), tip]),
+                true,
+                SeamFinish::Glued,
+            ),
+            seam(
+                "underarm",
+                b.points(&[pit, b.arm(UpperArm, false)]),
+                true,
+                SeamFinish::Glued,
+            ),
+        ],
+        inside: Some(b.at(extreme(b.tape(Waist), |p| p.z))),
+        ..Default::default()
+    }
+}
+
+/// A short-sleeved raglan top.
+pub fn top_raglan(body: &HumanBody) -> GarmentDesign {
+    use MeasureKind::*;
+    let k = Skeleton::new(body);
+    let b = &k.b;
+    let pit = k.armpit();
+    let neck = b.tape(Neck);
+    let c = neck.iter().copied().sum::<DVec3>() / neck.len() as f64;
+    // Where the raglan lines leave the neckline: diagonally front and back.
+    let front = extreme(neck, |p| (p.x - c.x) + (p.z - c.z));
+    let back = extreme(neck, |p| (p.x - c.x) - (p.z - c.z));
+    GarmentDesign {
+        curves: vec![
+            edge("hem", b.ring(Hips, 12), false, Some(HEM)),
+            edge("neckline", b.ring(Neck, 10), false, Some(TRIM)),
+            edge(
+                "sleeve",
+                b.ring_through(UpperArm, 8, &[b.arm(UpperArm, false)]),
+                true,
+                Some(EdgeFinish::Raw),
+            ),
+            seam(
+                "side",
+                b.points(&[
+                    b.side(Hips),
+                    b.side(Waist),
+                    b.side(Underbust),
+                    b.side(Bust),
+                    pit,
+                    b.arm(UpperArm, false),
+                ]),
+                true,
+                SeamFinish::Glued,
+            ),
+            seam(
+                "front raglan",
+                b.points(&[front, pit]),
+                true,
+                SeamFinish::Glued,
+            ),
+            seam(
+                "back raglan",
+                b.points(&[back, pit]),
+                true,
+                SeamFinish::Glued,
+            ),
+        ],
+        inside: Some(b.at(extreme(b.tape(Waist), |p| p.z))),
+        ..Default::default()
+    }
+}
+
+/// [`top_finished`] with princess seams: from the middle of each shoulder
+/// over the bust point, then down to the hem.
+pub fn top_princess(body: &HumanBody) -> GarmentDesign {
+    use MeasureKind::*;
+    let b = Landmarks {
+        mesh: &body.mesh,
+        tapes: &body.tapes,
+    };
+    let mut d = top_finished(&body.mesh, &body.tapes);
+    let apex = extreme(b.tape(Bust), |p| if p.x > 20.0 { p.z } else { f64::MIN });
+    let front_at = |k, x: f64| {
+        *b.tape(k)
+            .iter()
+            .filter(|p| p.z > 0.0)
+            .min_by(|a, c| (a.x - x).abs().total_cmp(&(c.x - x).abs()))
+            .expect("loop")
+    };
+    let shoulder = b.side(Neck).lerp(extreme(b.tape(UpperArm), |p| p.y), 0.4);
+    d.curves.push(seam(
+        "princess",
+        b.points(&[
+            shoulder,
+            apex,
+            front_at(Underbust, apex.x),
+            front_at(Waist, 0.8 * apex.x),
+            front_at(Hips, 0.85 * apex.x),
+        ]),
+        true,
+        SeamFinish::Glued,
+    ));
+    d
+}
+
+/// A catsuit with set-in sleeves and a diamond crotch gusset.
+pub fn catsuit_set_in(body: &HumanBody) -> GarmentDesign {
+    use MeasureKind::*;
+    let k = Skeleton::new(body);
+    let b = &k.b;
+    let (pit, tip) = (k.armpit(), k.shoulder_tip());
+    let crotch = b.crotch();
+    // The gusset: an oval round the crotch, 60 mm to the front and back
+    // along the centre line and 45 mm onto each inner thigh, as eight points
+    // placed on the skin. Its front and back points lie on the centre line,
+    // where the centre seams end; the inside-leg seams start at its sides.
+    let oval = |theta: f64| {
+        let target = crotch + DVec3::new(45.0 * theta.sin(), 10.0, 60.0 * theta.cos());
+        let p = b
+            .at(target)
+            .position(b.mesh.positions(), b.mesh.triangles())
+            .expect("on body");
+        if theta.sin().abs() < 1e-9 {
+            DVec3::new(0.0, p.y, p.z)
+        } else {
+            p
+        }
+    };
+    let ring: Vec<DVec3> = (0..8)
+        .map(|k| oval(k as f64 * std::f64::consts::FRAC_PI_4))
+        .collect();
+    let (gf, gb, gs) = (ring[0], ring[4], ring[2]);
+    let torso = |front: bool, end: DVec3| {
+        let mut v = vec![b.centre(Neck, front)];
+        v.extend([Bust, Underbust, Waist, Hips].map(|kk| b.centre(kk, front)));
+        v.push(end);
+        b.points(&v)
+    };
+    GarmentDesign {
+        curves: vec![
+            edge("neckline", b.ring(Neck, 10), false, Some(TRIM)),
+            edge(
+                "wrist",
+                b.ring_through(Wrist, 8, &[b.arm(Wrist, false), b.arm(Wrist, true)]),
+                true,
+                Some(EdgeFinish::Raw),
+            ),
+            edge(
+                "ankle",
+                b.ring_through(Ankle, 8, &[b.leg(Ankle, false), b.leg(Ankle, true)]),
+                true,
+                Some(EdgeFinish::Raw),
+            ),
+            seam("centre front", torso(true, gf), false, SeamFinish::Glued),
+            seam("centre back", torso(false, gb), false, SeamFinish::Zip),
+            seam("gusset", b.points(&ring), false, SeamFinish::Glued).closed_loop(),
+            seam("armhole", k.armhole_ring(), true, SeamFinish::Glued).closed_loop(),
+            seam(
+                "shoulder",
+                b.points(&[b.side(Neck), tip]),
+                true,
+                SeamFinish::Glued,
+            ),
+            seam(
+                "underarm",
+                b.points(&[pit, b.arm(UpperArm, false), b.arm(Wrist, false)]),
+                true,
+                SeamFinish::Glued,
+            ),
+            seam(
+                "side",
+                b.points(&[
+                    pit,
+                    b.side(Bust),
+                    b.side(Underbust),
+                    b.side(Waist),
+                    b.side(Hips),
+                    b.leg(Thigh, true),
+                    b.leg(Knee, true),
+                    b.leg(Calf, true),
+                    b.leg(Ankle, true),
+                ]),
+                true,
+                SeamFinish::Glued,
+            ),
+            seam(
+                "inside leg",
+                b.points(&[
+                    gs,
+                    b.leg(Thigh, false),
+                    b.leg(Knee, false),
+                    b.leg(Calf, false),
+                    b.leg(Ankle, false),
+                ]),
+                true,
+                SeamFinish::Glued,
+            ),
+        ],
+        inside: Some(b.at(extreme(b.tape(Thigh), |p| p.z))),
+        ..Default::default()
+    }
+}
+
+impl Curve {
+    fn closed_loop(mut self) -> Self {
+        self.closed = true;
+        self
     }
 }
