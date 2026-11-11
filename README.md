@@ -53,9 +53,14 @@ Below the 3D view, draw the garment on the body:
   body; close the loop.
 - **Seams** split the garment into pieces that lie flat. Their ends snap
   onto an edge or another seam within 2 cm.
-- Curves pass smoothly through the points you click; tick **Mirror** to get
-  the same curve on the other side.
+- Curves pass smoothly through the points you click; drag a point of the
+  selected curve to move it. Tick **Mirror** to get the same curve on the
+  other side.
 - **Pick inside** chooses which side of the edges is the garment.
+
+Each piece's report gives its stretch range and the stretch that 95 % of
+its area stays under, which is not thrown off by a few tiny triangles at
+sharp seam corners the way the maximum is.
 
 The preview shows the garment in latex colour and says how many flat
 pieces the seams make, or which piece still wraps around and needs a seam.

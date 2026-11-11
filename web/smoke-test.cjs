@@ -62,6 +62,24 @@ const done = (p) => p.waitForFunction(
   await page.waitForFunction(() => /1 point/.test(document.getElementById('g-curves').textContent), null, { timeout: 30000 });
   await page.click('#g-delete');
   await page.waitForFunction(() => document.querySelectorAll('#g-curves li').length === 5, null, { timeout: 30000 });
+  // Drag the hem's most frontal point down: it moves, no point is added,
+  // and the view does not turn.
+  await page.locator('#g-curves li').first().click();
+  const t = await page.evaluate(() => {
+    const pts = design.curves[active].points.map((sp, i) => ({ i, q: pointOf(sp) }));
+    pts.sort((a, b) => b.q[2] - a.q[2]);
+    const s = viewer.project(pts[0].q);
+    return { i: pts[0].i, x: s.x, y: s.y, y3: pts[0].q[1], n: pts.length, yaw: viewer.yaw };
+  });
+  await page.mouse.move(box.x + t.x, box.y + t.y);
+  await page.mouse.down();
+  for (let k = 1; k <= 8; k++) await page.mouse.move(box.x + t.x, box.y + t.y + 5 * k);
+  await page.mouse.up();
+  const moved = await page.evaluate((i) => ({ y3: pointOf(design.curves[active].points[i])[1], n: design.curves[active].points.length, yaw: viewer.yaw }), t.i);
+  assert.ok(moved.y3 < t.y3 - 20, `dragged point should move down: ${t.y3} -> ${moved.y3}`);
+  assert.equal(moved.n, t.n);
+  assert.equal(moved.yaw, t.yaw);
+  await garmentReady();
   await page.click('#run');
   await page.waitForFunction(
     () => !document.getElementById('run').disabled && /Done|error/i.test(document.getElementById('status').textContent),
