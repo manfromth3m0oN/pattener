@@ -80,11 +80,21 @@ const done = (p) => p.waitForFunction(
   assert.equal(moved.n, t.n);
   assert.equal(moved.yaw, t.yaw);
   await garmentReady();
+  // An ease zone by clicking the body, then the pattern with lengthwise
+  // relief: the pressure map appears and the table has pressure columns.
+  await page.click('#g-zone');
+  await page.mouse.click(box.x + box.width * 0.5, box.y + box.height * 0.42);
+  await page.waitForFunction(() => document.querySelectorAll('#g-zones tr').length === 2, null, { timeout: 30000 });
+  await garmentReady();
+  await page.fill('#length-relief', '40');
   await page.click('#run');
   await page.waitForFunction(
     () => !document.getElementById('run').disabled && /Done|error/i.test(document.getElementById('status').textContent),
-    null, { timeout: 60000 });
+    null, { timeout: 90000 });
   assert.match(await page.textContent('#status'), /Done .*2 panels/);
+  assert.ok(await page.isVisible('#pressure-panel'));
+  assert.match(await page.locator('#panel-table').innerText(), /mmHg/);
+  await page.fill('#length-relief', '100');
   await page.evaluate(() => localStorage.clear());
 
   // 1. Quick torso from the default measurements, with heatmap and sheet layout.

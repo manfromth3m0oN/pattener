@@ -163,10 +163,11 @@ async function fitBody() {
 $('fit-body').onclick = fitBody;
 
 // ---- garment drawn on the body ------------------------------------------------
-let design = { curves: [], inside: null };
+let design = { curves: [], inside: null, zones: [] };
 let active = -1;          // selected curve index
 let picking = null;       // 'add' | 'inside' | null
 const EDGE_COLOR = [0.95, 0.75, 0.05], SEAM_COLOR = [0.15, 0.6, 1.0], ACTIVE_COLOR = [1, 1, 1];
+const ZONE_COLOR = [0.45, 0.85, 0.35];
 
 // Surface point (face + barycentric) to 3D on the fitted body.
 function pointOf(sp) {
@@ -178,6 +179,7 @@ function pointOf(sp) {
 function setPicking(mode) {
   picking = mode;
   $('g-inside').classList.toggle('active', mode === 'inside');
+  $('g-zone').classList.toggle('active', mode === 'zone');
   if (viewer) $('viewer').classList.toggle('picking', !!mode);
 }
 
@@ -222,6 +224,9 @@ function drawMarks() {
 let garmentBusy = false, garmentAgain = false;
 async function refreshGarment() {
   renderCurveList();
+  renderZones();
+  lastFit = null;
+  $('pressure-panel').hidden = true;
   if (!baseMesh) return;
   if (garmentBusy) { garmentAgain = true; return; }
   garmentBusy = true;
@@ -229,7 +234,7 @@ async function refreshGarment() {
   try {
     do {
       garmentAgain = false;
-      const empty = design.curves.every((c) => c.points.length === 0) && !design.inside;
+      const empty = design.curves.every((c) => c.points.length === 0) && !design.inside && !design.zones.length;
       if (empty) {
         viewer?.setMesh(baseMesh.positions, baseMesh.triangles);
         viewer?.setLines(tapes);
@@ -241,11 +246,14 @@ async function refreshGarment() {
       const r = await call({ command: 'garment', body: readBody(), design });
       if (!r.ok) throw new Error(r.error);
       viewer?.setMesh(new Float32Array(r.positions), new Uint32Array(r.triangles), new Uint32Array(r.garment_triangles));
-      viewer?.setLines(r.curves.map((c, i) => ({
-        points: new Float32Array(c.points),
-        closed: c.closed,
-        color: c.kind === 'edge' ? EDGE_COLOR : SEAM_COLOR,
-      })));
+      viewer?.setLines([
+        ...r.curves.map((c) => ({
+          points: new Float32Array(c.points),
+          closed: c.closed,
+          color: c.kind === 'edge' ? EDGE_COLOR : SEAM_COLOR,
+        })),
+        ...zoneLoops(r.zones),
+      ]);
       $('g-warnings').replaceChildren(...r.warnings.map((w) => Object.assign(document.createElement('li'), { textContent: w })));
       if (r.panel_error) {
         status.className = 'error';
@@ -280,6 +288,13 @@ if (viewer) {
     const sp = { face: hit.face, u: hit.u, v: hit.v };
     if (picking === 'inside') {
       design.inside = sp;
+      setPicking(design.curves[active] ? 'add' : null);
+    } else if (picking === 'zone') {
+      const base = num('ease') || 0.85;
+      design.zones.push({
+        name: `zone ${design.zones.length + 1}`, center: sp, radius_mm: 100,
+        ease: Math.min(1, +(base + 0.05).toFixed(2)), mirror: false,
+      });
       setPicking(design.curves[active] ? 'add' : null);
     } else if (design.curves[active]) {
       design.curves[active].points.push(sp);
@@ -338,6 +353,70 @@ if (viewer) {
 $('g-new-edge').onclick = () => newCurve('edge');
 $('g-new-seam').onclick = () => newCurve('seam');
 $('g-inside').onclick = () => setPicking(picking === 'inside' ? 'add' : 'inside');
+$('g-zone').onclick = () => setPicking(picking === 'zone' ? (design.curves[active] ? 'add' : null) : 'zone');
+
+function renderZones() {
+  $('g-zones-wrap').hidden = design.zones.length === 0;
+  table($('g-zones'), ['zone', 'radius (mm)', 'ease', 'mirror', ''], []);
+  design.zones.forEach((z, i) => {
+    const row = $('g-zones').insertRow();
+    const input = (type, value, set, attrs = {}) => {
+      const el = Object.assign(document.createElement('input'), { type, ...attrs });
+      if (type === 'checkbox') el.checked = value; else el.value = value;
+      el.onchange = () => { set(type === 'checkbox' ? el.checked : type === 'number' ? Number(el.value) : el.value); changed(); };
+      row.insertCell().appendChild(el);
+    };
+    input('text', z.name, (v) => { z.name = v; });
+    input('number', z.radius_mm, (v) => { z.radius_mm = v; }, { min: 10, step: 10 });
+    input('number', z.ease, (v) => { z.ease = v; }, { min: 0.5, max: 1.2, step: 0.01 });
+    input('checkbox', z.mirror, (v) => { z.mirror = v; });
+    const del = Object.assign(document.createElement('button'), { type: 'button', textContent: '✕', title: 'Remove zone' });
+    del.onclick = () => { design.zones.splice(i, 1); changed(); };
+    row.insertCell().appendChild(del);
+  });
+}
+
+// Three great circles per zone, so its extent reads from any angle.
+function zoneLoops(zones) {
+  const loops = [];
+  for (const z of zones) {
+    for (let axis = 0; axis < 3; axis++) {
+      const pts = [];
+      for (let k = 0; k < 48; k++) {
+        const a = (2 * Math.PI * k) / 48, p = [...z.center];
+        const [i, j] = [[1, 2], [0, 2], [0, 1]][axis];
+        p[i] += z.radius_mm * Math.cos(a);
+        p[j] += z.radius_mm * Math.sin(a);
+        pts.push(...p);
+      }
+      loops.push({ points: new Float32Array(pts), color: ZONE_COLOR, closed: true });
+    }
+  }
+  return loops;
+}
+
+// Pressure colours: blue where the latex bridges, white at 0, orange to
+// red up to 40 mmHg (matches the legend in index.html).
+function pressureColor(p) {
+  const lerp = (a, b, t) => a.map((x, k) => x + (b[k] - x) * t);
+  const blue = [0.16, 0.35, 0.78], white = [0.95, 0.95, 0.95], orange = [0.95, 0.55, 0.1], red = [0.7, 0, 0];
+  if (p < 0) return lerp(white, blue, Math.min(1, -p / 10));
+  if (p < 20) return lerp(white, orange, p / 20);
+  return lerp(orange, red, Math.min(1, (p - 20) / 20));
+}
+
+let lastFit = null;
+function showFit() {
+  if (!viewer || !lastFit) return;
+  const { positions, triangles, garment, pressure } = lastFit;
+  let colors = null;
+  if ($('show-pressure').checked) {
+    colors = new Float32Array(positions.length);
+    pressure.forEach((p, i) => colors.set(pressureColor(p), 3 * i));
+  }
+  viewer.setMesh(positions, triangles, garment, colors);
+}
+$('show-pressure').onchange = showFit;
 $('g-undo').onclick = () => {
   const c = design.curves[active];
   if (c && c.points.length) { c.points.pop(); changed(); }
@@ -350,7 +429,7 @@ $('g-delete').onclick = () => {
 };
 $('g-clear').onclick = () => {
   if (design.curves.length && !confirm('Remove the whole garment drawing?')) return;
-  design = { curves: [], inside: null };
+  design = { curves: [], inside: null, zones: [] };
   active = -1;
   setPicking(null);
   changed();
@@ -359,6 +438,7 @@ $('g-example').onclick = async () => {
   if (design.curves.length && !confirm('Replace the current garment with the example top?')) return;
   const p = await (await fetch('examples/top.project.json')).json();
   design = p.garment;
+  design.zones = design.zones || [];
   active = -1;
   setPicking(null);
   changed();
@@ -382,6 +462,7 @@ function writeProject(p) {
   $('units').value = units;
   writeBody(p.body || {});
   design = p.garment && Array.isArray(p.garment.curves) ? p.garment : { curves: [], inside: null };
+  design.zones = design.zones || [];
   active = -1;
   setPicking(null);
 }
@@ -415,7 +496,7 @@ $('project-open').onchange = async () => {
 };
 $('project-new').onclick = () => {
   if (!confirm('Start a new project? Unsaved changes to this one will be lost.')) return;
-  writeProject({ name: 'Untitled', body: { measurements: {}, shape: {} }, garment: { curves: [], inside: null }, units });
+  writeProject({ name: 'Untitled', body: { measurements: {}, shape: {} }, garment: { curves: [], inside: null, zones: [] }, units });
   saveLocal();
   fitBody();
 };
@@ -525,8 +606,9 @@ function show(output, extraFiles) {
   if (output.layout_svg) dl.appendChild(fileLink('layout.svg', output.layout_svg, 'image/svg+xml'));
   dl.appendChild(fileLink('report.json', JSON.stringify(r, null, 2), 'application/json'));
 
-  table($('panel-table'), ['panel', 'ease', 'min σ', '95 % under', 'max σ', 'cut size (mm)', 'seams'],
+  table($('panel-table'), ['panel', 'ease', 'min σ', '95 % under', 'max σ', 'slack', 'mmHg', '95 % under', 'bridging', 'cut size (mm)', 'seams'],
     r.panels.map((p) => [p.index, f(p.ease, 3), f(p.min_stretch, 3), f(p.p95_stretch, 3), f(p.max_stretch, 3),
+      `${f(100 * p.slack_fraction, 0)} %`, f(p.mean_pressure_mmhg, 1), f(p.p95_pressure_mmhg, 1), `${f(100 * p.bridging_fraction, 0)} %`,
       `${f(p.cut_width_mm)} × ${f(p.cut_height_mm)}`, p.seams.join(', ')]));
   table($('seam-table'), ['seam', 'panels', 'body (mm)', 'flat (mm)', 'mismatch (mm)', 'before matching'],
     r.seams.map((s) => [s.seam, `${s.left_panel}↔${s.right_panel}`, f(s.body_length_mm),
@@ -595,6 +677,8 @@ async function run() {
         notch_spacing: num('notch') > 0 ? num('notch') : null,
       },
       heatmap: $('heatmap').value || null,
+      length_relief: Math.max(0, Math.min(100, num('length-relief'))) / 100,
+      material: { thickness_mm: num('thickness') || 0.4 },
       sheet: sheetWidth > 0 ? { sheet_width: sheetWidth, gap: 5, allow_rotation: true } : null,
     };
     const t0 = performance.now();
@@ -603,6 +687,16 @@ async function run() {
       : await call({ command: 'pattern', obj, seams, scale, options });
     if (!res.ok) throw new Error(res.error);
     show(res.output, extra);
+    if (res.pressure) {
+      lastFit = {
+        positions: new Float32Array(res.positions),
+        triangles: new Uint32Array(res.triangles),
+        garment: new Uint32Array(res.garment_triangles),
+        pressure: res.pressure,
+      };
+      $('pressure-panel').hidden = false;
+      showFit();
+    }
     status.textContent = `Done in ${f((performance.now() - t0) / 1000, 1)} s: ${res.output.report.panels.length} panels.`;
   } catch (e) {
     status.className = 'error';

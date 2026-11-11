@@ -27,9 +27,9 @@
 use latexpat_core::body::{torso, BodyMeasurements, BodyOptions};
 use latexpat_core::calibrate::{calibrate, Calibration};
 use latexpat_core::cut::cut_panels;
-use latexpat_core::garment::{build, GarmentDesign};
+use latexpat_core::garment::{build, zones_on, GarmentDesign};
 use latexpat_core::glam::DVec3;
-use latexpat_core::human::{fit, BodyModel, HumanBody, Measurer};
+use latexpat_core::human::{along_body, fit, BodyModel, HumanBody, Measurer};
 use latexpat_core::job::{self, JobOptions};
 use latexpat_core::obj::{parse_obj, write_obj};
 use latexpat_core::project::BodySpec;
@@ -215,8 +215,20 @@ fn run(request: &str) -> Result<Value, String> {
                     .map(|p| p.len())
                     .map_err(|e| e.to_string())
             });
+            let zones = zones_on(&b.mesh, &design).map_err(|e| e.to_string())?;
             let output = match (&g.mesh, pattern) {
                 (Some(m), true) => {
+                    let mut options = options;
+                    // The body is Y-up; "along" follows its bones.
+                    options.up = DVec3::Y;
+                    let centres: Vec<DVec3> = m
+                        .triangles()
+                        .iter()
+                        .map(|t| t.iter().map(|&i| m.positions()[i as usize]).sum::<DVec3>() / 3.0)
+                        .collect();
+                    options.along =
+                        Some(along_body(&b.joints, &centres).map_err(|e| e.to_string())?);
+                    options.ease_zones = zones.clone();
                     Some(job::run(m, &g.seams, &options).map_err(|e| e.to_string())?)
                 }
                 (None, true) => {
@@ -224,6 +236,18 @@ fn run(request: &str) -> Result<Value, String> {
                 }
                 _ => None,
             };
+            // Pressure on the cut body's vertices (0 off the garment).
+            let pressure = output.as_ref().map(|o| {
+                let mut p = vec![0.0f32; g.body.positions().len()];
+                for (&v, &x) in g.vertex_origin.iter().zip(&o.fit.pressure_mmhg) {
+                    p[v as usize] = x as f32;
+                }
+                p
+            });
+            let zone_json: Vec<Value> = zones
+                .iter()
+                .map(|z| json!({ "center": [z.center.x, z.center.y, z.center.z], "radius_mm": z.radius_mm, "ease": z.ease }))
+                .collect();
             Ok(json!({
                 "ok": true,
                 "positions": flat3(g.body.positions().iter().copied()),
@@ -233,6 +257,8 @@ fn run(request: &str) -> Result<Value, String> {
                 "warnings": g.warnings,
                 "panels": panels.as_ref().and_then(|p| p.as_ref().ok()),
                 "panel_error": panels.as_ref().and_then(|p| p.as_ref().err()),
+                "zones": zone_json,
+                "pressure": pressure,
                 "output": output,
             }))
         }
@@ -363,6 +389,16 @@ mod tests {
         assert!(n > 0 && n.is_multiple_of(3));
         let full = parse(&handle(&req(true)));
         assert_eq!(full["output"]["panel_svgs"].as_array().unwrap().len(), 2);
+        // Pressure on every body vertex; positive on the garment somewhere.
+        let p = full["pressure"].as_array().unwrap();
+        assert_eq!(p.len(), full["positions"].as_array().unwrap().len() / 3);
+        assert!(p.iter().any(|x| x.as_f64().unwrap() > 5.0));
+        assert!(
+            full["output"]["report"]["panels"][0]["p95_pressure_mmhg"]
+                .as_f64()
+                .unwrap()
+                > 0.0
+        );
     }
 
     #[test]

@@ -18,15 +18,15 @@ class Viewer {
 
     const vs = `#version 300 es
       uniform mat4 mvp; uniform mat4 model;
-      in vec3 pos; in vec3 nrm; out vec3 n;
-      void main() { n = mat3(model) * nrm; gl_Position = mvp * vec4(pos, 1.0); }`;
+      in vec3 pos; in vec3 nrm; in vec3 col; out vec3 n; out vec3 c;
+      void main() { n = mat3(model) * nrm; c = col; gl_Position = mvp * vec4(pos, 1.0); }`;
     const fs = `#version 300 es
       precision mediump float;
-      uniform vec3 color; uniform float lit; in vec3 n; out vec4 o;
+      uniform vec3 color; uniform float lit; uniform float useCol; in vec3 n; in vec3 c; out vec4 o;
       void main() {
         vec3 l = normalize(vec3(0.4, 0.6, 1.0));
-        float d = lit > 0.5 ? 0.35 + 0.65 * max(dot(normalize(n), l), 0.0) : 1.0;
-        o = vec4(color * d, 1.0);
+        float d = lit > 0.5 ? 0.45 + 0.55 * max(dot(normalize(n), l), 0.0) : 1.0;
+        o = vec4(mix(color, c, useCol) * d, 1.0);
       }`;
     this.prog = this._program(vs, fs);
     this.loc = {
@@ -36,6 +36,8 @@ class Viewer {
       model: gl.getUniformLocation(this.prog, 'model'),
       color: gl.getUniformLocation(this.prog, 'color'),
       lit: gl.getUniformLocation(this.prog, 'lit'),
+      useCol: gl.getUniformLocation(this.prog, 'useCol'),
+      col: gl.getAttribLocation(this.prog, 'col'),
     };
 
     this.onClick = null;
@@ -113,7 +115,9 @@ class Viewer {
   // positions: Float32Array (x, y, z per vertex, mm); triangles: Uint32Array.
   // overlay: optional Uint32Array of triangles drawn in overlayColor (the
   // garment) instead of the base colour.
-  setMesh(positions, triangles, overlay = null) {
+  // overlayColors: optional Float32Array (r, g, b per vertex) colouring the
+  // overlay instead of overlayColor.
+  setMesh(positions, triangles, overlay = null, overlayColors = null) {
     const normals = new Float32Array(positions.length);
     for (let t = 0; t < triangles.length; t += 3) {
       const [a, b, c] = [triangles[t] * 3, triangles[t + 1] * 3, triangles[t + 2] * 3];
@@ -150,7 +154,11 @@ class Viewer {
       count: base.length,
     };
     this.overlay = overlay && overlay.length
-      ? { idx: this._buffer(overlay, gl.ELEMENT_ARRAY_BUFFER), count: overlay.length }
+      ? {
+        idx: this._buffer(overlay, gl.ELEMENT_ARRAY_BUFFER),
+        count: overlay.length,
+        col: overlayColors ? this._buffer(overlayColors) : null,
+      }
       : null;
     this.draw();
   }
@@ -265,10 +273,19 @@ class Viewer {
     gl.vertexAttribPointer(this.loc.nrm, 3, gl.FLOAT, false, 0, 0);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.mesh.idx);
     gl.drawElements(gl.TRIANGLES, this.mesh.count, gl.UNSIGNED_INT, 0);
+    gl.uniform1f(this.loc.useCol, 0);
     if (this.overlay) {
       gl.uniform3fv(this.loc.color, this.overlayColor);
+      if (this.overlay.col && this.loc.col >= 0) {
+        gl.uniform1f(this.loc.useCol, 1);
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.overlay.col);
+        gl.enableVertexAttribArray(this.loc.col);
+        gl.vertexAttribPointer(this.loc.col, 3, gl.FLOAT, false, 0, 0);
+      }
       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.overlay.idx);
       gl.drawElements(gl.TRIANGLES, this.overlay.count, gl.UNSIGNED_INT, 0);
+      if (this.loc.col >= 0) gl.disableVertexAttribArray(this.loc.col);
+      gl.uniform1f(this.loc.useCol, 0);
     }
     gl.disable(gl.POLYGON_OFFSET_FILL);
 

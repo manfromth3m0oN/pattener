@@ -58,6 +58,7 @@
             <button type="button" id="g-inside">Pick inside</button>
             <button type="button" id="g-undo">Undo point</button>
             <button type="button" id="g-delete">Delete curve</button>
+            <button type="button" id="g-zone">Add ease zone</button>
             <button type="button" id="g-example">Load example top</button>
             <button type="button" id="g-clear">Clear</button>
           </div>
@@ -67,6 +68,18 @@
             <label class="check"><input type="checkbox" id="g-mirror"> Mirror to other side</label>
           </div>
           <ul id="g-curves" class="curve-list"></ul>
+          <div id="g-zones-wrap" hidden>
+            <h4>Ease zones</h4>
+            <p class="hint">A zone has its own ease within its radius, blending back to the rest towards the edge:
+              higher (e.g. 0.92) is looser, lower is tighter.</p>
+            <table id="g-zones"></table>
+          </div>
+          <div id="pressure-panel" hidden>
+            <label class="check"><input type="checkbox" id="show-pressure" checked> Show pressure on the body</label>
+            <div class="legend"><span>bridging</span><span class="bar"></span><span>40+ mmHg</span></div>
+            <p class="hint">How hard the latex presses on the body. Blue: it bridges over a hollow and won't touch the skin.
+              Red: it presses hard (15–20 mmHg is light compression; over 40 is very firm). Updated by Make pattern.</p>
+          </div>
           <p id="g-status" role="status"></p>
           <ul id="g-warnings"></ul>
         </div>
@@ -114,6 +127,10 @@
       </label>
       <label>Hem allowance (mm) <input type="number" id="hem" value="0" step="1" min="0"></label>
       <label>Notch spacing (mm) <input type="number" id="notch" value="50" step="5" min="0"></label>
+      <label title="Latex is usually reduced less along the body than around it; 30–50 % is typical.">Lengthwise reduction (% of around)
+        <input type="number" id="length-relief" value="100" step="5" min="0" max="100"></label>
+      <label title="Used for the pressure map unless a swatch calibration is given.">Latex thickness (mm)
+        <input type="number" id="thickness" value="0.40" step="0.05" min="0.05"></label>
       <label>Heatmap
         <select id="heatmap"><option value="">none</option><option value="max_stretch">max stretch</option><option value="area_stretch">area stretch</option></select>
       </label>

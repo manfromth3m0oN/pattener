@@ -174,6 +174,8 @@ pub struct BuiltGarment {
     pub mesh: Option<Mesh>,
     /// Seams in `mesh` vertex indices.
     pub seams: SeamSet,
+    /// For each vertex of `mesh`, its vertex in `body`.
+    pub vertex_origin: Vec<u32>,
     pub warnings: Vec<String>,
 }
 
@@ -303,6 +305,7 @@ pub fn build(body: &Mesh, design: &GarmentDesign) -> Result<BuiltGarment> {
     let mut region = vec![false; body_mesh.triangles().len()];
     let mut mesh = None;
     let mut seams = SeamSet::default();
+    let mut vertex_origin = Vec::new();
     if let Some(inside) = design.inside {
         let p = inside
             .position(pos0, tri0)
@@ -342,6 +345,7 @@ pub fn build(body: &Mesh, design: &GarmentDesign) -> Result<BuiltGarment> {
                 triangles.push(t.map(|v| {
                     *local.entry(v).or_insert_with(|| {
                         positions.push(body_mesh.positions()[v as usize]);
+                        vertex_origin.push(v);
                         (positions.len() - 1) as u32
                     })
                 }));
@@ -398,6 +402,7 @@ pub fn build(body: &Mesh, design: &GarmentDesign) -> Result<BuiltGarment> {
         region,
         mesh,
         seams,
+        vertex_origin,
         warnings,
     })
 }

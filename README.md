@@ -58,6 +58,26 @@ Below the 3D view, draw the garment on the body:
   other side.
 - **Pick inside** chooses which side of the edges is the garment.
 
+### Fit tools
+
+- **Lengthwise reduction** (`--length-relief`, or "% of around" in the web
+  app): latex is usually reduced less along the body than around it.
+  The reference shapes are scaled by `s` around and `1 − r(1 − s)` along
+  the body; "along" follows the skeleton on the full body (bone
+  directions blended as orientation tensors) and the up axis otherwise.
+- **Ease zones**: click a point on the body and give it its own ease
+  within a radius (looser at the crotch or a cuff, firmer at the waist),
+  blending back to the rest; zones can be mirrored and follow the body.
+- **Pressure map**: after Make pattern the garment on the body is coloured
+  by how hard it presses, `p = T₁κ₁ + T₂κ₂` (neo-Hookean tensions in the
+  principal stretch directions times the body's curvature in those
+  directions, at a latex-scale of a few centimetres), in mmHg. Blue marks
+  where it **bridges** a hollow instead of touching the skin. Each piece
+  reports its mean and 95th-percentile pressure, bridging and slack
+  (wrinkle-prone) area; pieces where 5 % exceeds 40 mmHg are flagged.
+  Pressure uses the calibrated sheets, or `--thickness` (default 0.40 mm)
+  with μ = 0.45 MPa.
+
 Each piece's report gives its stretch range and the stretch that 95 % of
 its area stays under, which is not thrown off by a few tiny triangles at
 sharp seam corners the way the maximum is.
@@ -279,7 +299,6 @@ flatten to sides 3.1 mm apart; matching removes the gap edge by edge
 
 Next, towards designing whole garments: full body from measurements with a
 3D view and project files (done); garments drawn on the body (done); fit
-tools (directional and
-per-region ease, pressure and bridging map); materials and colour (sheet
+tools (done); materials and colour (sheet
 catalogue, per-panel colour, preview, quantities); construction details
 and print output (zips, trims, tiled PDF, assembly guide); templates.
