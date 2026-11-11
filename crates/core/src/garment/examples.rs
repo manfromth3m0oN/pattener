@@ -51,6 +51,7 @@ pub fn top(mesh: &Mesh, tapes: &[(MeasureKind, Vec<DVec3>)]) -> GarmentDesign {
         points,
         closed,
         mirror,
+        ..Default::default()
     };
     GarmentDesign {
         curves: vec![

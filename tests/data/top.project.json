@@ -79,7 +79,11 @@
           }
         ],
         "closed": true,
-        "mirror": false
+        "mirror": false,
+        "edge_finish": {
+          "kind": "hem",
+          "width_mm": 20.0
+        }
       },
       {
         "name": "neckline",
@@ -137,7 +141,12 @@
           }
         ],
         "closed": true,
-        "mirror": false
+        "mirror": false,
+        "edge_finish": {
+          "kind": "trim",
+          "width_mm": 15.0,
+          "ease": 0.9
+        }
       },
       {
         "name": "sleeve",
@@ -185,7 +194,10 @@
           }
         ],
         "closed": true,
-        "mirror": true
+        "mirror": true,
+        "edge_finish": {
+          "kind": "raw"
+        }
       },
       {
         "name": "side",

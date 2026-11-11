@@ -5,6 +5,7 @@
 use latexpat_core::garment::examples::top;
 use latexpat_core::human::{fit, BodyModel, Measurements, Measurer, ShapeOptions};
 use latexpat_core::materials::Sheet;
+use latexpat_core::pattern::EdgeFinish;
 use latexpat_core::project::{BodySpec, Project};
 
 fn main() {
@@ -17,7 +18,20 @@ fn main() {
         &ShapeOptions::default(),
     )
     .unwrap();
-    let design = top(&body.mesh, &body.tapes);
+    let mut design = top(&body.mesh, &body.tapes);
+    // Construction: a bound neckline and a folded hem; the sleeves are left
+    // raw (cut on the line).
+    for c in &mut design.curves {
+        c.edge_finish = match c.name.as_str() {
+            "neckline" => Some(EdgeFinish::Trim {
+                width_mm: 15.0,
+                ease: 0.9,
+            }),
+            "hem" => Some(EdgeFinish::Hem { width_mm: 20.0 }),
+            "sleeve" => Some(EdgeFinish::Raw),
+            _ => None,
+        };
+    }
     let project = Project {
         name: "Short-sleeved top".into(),
         body: BodySpec::default(),

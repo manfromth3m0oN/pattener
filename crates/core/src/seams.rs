@@ -53,7 +53,8 @@ pub enum SeamFinish {
 }
 
 impl SeamFinish {
-    fn is_default(&self) -> bool {
+    #[cfg(feature = "serde")]
+    pub(crate) fn is_default(&self) -> bool {
         *self == SeamFinish::Glued
     }
 }
