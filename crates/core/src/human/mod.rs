@@ -1,9 +1,9 @@
 //! Full body from measurements, using a morphable body model.
 //!
 //! - [`model`]: the base mesh, joints and morph targets (MakeHuman, CC0).
-//! - [`slice`]: tape-measure girths from plane cuts.
+//! - [`mod@slice`]: tape-measure girths from plane cuts.
 //! - [`measure`]: where and how each body measurement is taken.
-//! - [`fit`]: solving the shape parameters so the body matches a set of
+//! - [`mod@fit`]: solving the shape parameters so the body matches a set of
 //!   measurements.
 
 pub mod fit;

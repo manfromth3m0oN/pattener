@@ -54,10 +54,15 @@ jobs:
         with:
           node-version: 22
 
+      # Uses the Google Chrome preinstalled on GitHub's Ubuntu runners, so no
+      # browser download or apt packages are needed (apt mirrors are a
+      # frequent source of flaky failures).
       - name: Browser smoke test
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+          PW_CHANNEL: chrome
         run: |
           npm install --no-save --no-package-lock playwright
-          npx playwright install --with-deps chromium
           python3 -m http.server -d web 8765 &
           sleep 1
           node web/smoke-test.cjs http://localhost:8765/
