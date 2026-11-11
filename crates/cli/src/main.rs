@@ -257,6 +257,7 @@ fn flatten(args: FlattenArgs) -> Result<()> {
             weight: args.seam_weight,
             ..Default::default()
         }),
+        panel_stiffness: None,
     };
     let garment = flatten_garment(&mesh, &seams, &opts)?;
     let panels = &garment.panels;

@@ -3,7 +3,7 @@
 use crate::arap::{arap, ArapOptions, EdgeTarget};
 use crate::cut::cut_panels;
 use crate::ease::Ease;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::lscm::lscm;
 use crate::mesh::Mesh;
 use crate::panel::Panel;
@@ -24,6 +24,10 @@ pub struct FlattenOptions {
     pub up: DVec3,
     /// Equalise the two sides of every seam; `None` to skip.
     pub seam_matching: Option<SeamMatching>,
+    /// Relative membrane stiffness `k = μ t` of each panel (in
+    /// [`cut_panels`] order), used to weight seam matching when panels are
+    /// cut from different sheets. `None` means all equal.
+    pub panel_stiffness: Option<Vec<f64>>,
 }
 
 impl Default for FlattenOptions {
@@ -33,6 +37,7 @@ impl Default for FlattenOptions {
             arap: ArapOptions::default(),
             up: DVec3::Y,
             seam_matching: Some(SeamMatching::default()),
+            panel_stiffness: None,
         }
     }
 }
@@ -40,7 +45,10 @@ impl Default for FlattenOptions {
 /// Seam-length equalisation settings.
 ///
 /// For every paired seam edge with flat lengths `ℓ_L`, `ℓ_R` the agreed
-/// length is `ℓ* = (ℓ_L + ℓ_R) / 2`. Each round re-runs ARAP on every
+/// length is the stiffness-weighted mean `ℓ* = (k_L ℓ_L + k_R ℓ_R) /
+/// (k_L + k_R)`, where the two tensions balance: gluing a thin sheet to a
+/// thick one moves the thick side less. With equal stiffness (the default)
+/// this is the plain mean. Each round re-runs ARAP on every
 /// seamed panel with soft [`EdgeTarget`]s of weight `weight`, then
 /// corrects each side's target by the gap it still has,
 /// `t ← t + (ℓ* − ℓ)` (with `ℓ*` recomputed from the new lengths). A soft
@@ -205,6 +213,15 @@ pub fn refine_panel(
 /// the lengths of paired seam edges.
 pub fn flatten_garment(mesh: &Mesh, seams: &SeamSet, opts: &FlattenOptions) -> Result<Garment> {
     let panels = cut_panels(mesh, &seams.resolve(mesh)?)?;
+    if let Some(k) = &opts.panel_stiffness {
+        if k.len() != panels.len() || k.iter().any(|v| !(v.is_finite() && *v > 0.0)) {
+            return Err(Error::InvalidEase(format!(
+                "panel_stiffness needs {} positive value(s), got {:?}",
+                panels.len(),
+                k
+            )));
+        }
+    }
     let eases = panels
         .iter()
         .map(|p| opts.ease.for_panel(p))
@@ -220,12 +237,19 @@ pub fn flatten_garment(mesh: &Mesh, seams: &SeamSet, opts: &FlattenOptions) -> R
 
     if let Some(m) = opts.seam_matching {
         let edges = seam_edge_pairs(&pairs);
+        let k = |pi: usize| opts.panel_stiffness.as_ref().map_or(1.0, |v| v[pi]);
+        let agreed = |(_, l, r): (usize, (usize, usize), (usize, usize)), ll: f64, lr: f64| {
+            (k(l.0) * ll + k(r.0) * lr) / (k(l.0) + k(r.0))
+        };
         // Current target per side, initialised to the agreed length.
         let mut targets: Vec<[f64; 2]> = edges
             .iter()
             .map(|&(_, l, r)| {
-                let avg =
-                    0.5 * (flat_edge_length(&flat[l.0], l.1) + flat_edge_length(&flat[r.0], r.1));
+                let avg = agreed(
+                    (0, l, r),
+                    flat_edge_length(&flat[l.0], l.1),
+                    flat_edge_length(&flat[r.0], r.1),
+                );
                 [avg, avg]
             })
             .collect();
@@ -247,8 +271,8 @@ pub fn flatten_garment(mesh: &Mesh, seams: &SeamSet, opts: &FlattenOptions) -> R
                 break;
             }
             if round > 0 {
-                for (t, &(ll, lr)) in targets.iter_mut().zip(&lengths) {
-                    let avg = 0.5 * (ll + lr);
+                for ((t, &(ll, lr)), &e) in targets.iter_mut().zip(&lengths).zip(&edges) {
+                    let avg = agreed(e, ll, lr);
                     t[0] += avg - ll;
                     t[1] += avg - lr;
                 }
@@ -332,5 +356,56 @@ mod tests {
             .position(|&o| o as usize == top)
             .unwrap();
         assert!(fp.uv[local].y > 0.5 * hi.y);
+    }
+
+    #[test]
+    fn stiffer_panel_moves_less_in_seam_matching() {
+        // Two halves at ease 0.8 and 0.9: the centre seam's sides want 128
+        // and 144 mm.
+        let m = testmesh::grid(10, 8, 20.0);
+        let seams = SeamSet {
+            seams: vec![crate::Seam {
+                vertices: (0..=8).map(|j| j * 11 + 5).collect(),
+                ..Default::default()
+            }],
+        };
+        let ease = Ease::per_panel(&m, &seams, &[0.8, 0.9]).unwrap();
+        let run = |k: Option<Vec<f64>>| {
+            let opts = FlattenOptions {
+                ease: ease.clone(),
+                panel_stiffness: k,
+                ..Default::default()
+            };
+            let g = flatten_garment(&m, &seams, &opts).unwrap();
+            let s = &g.seams[0];
+            assert!(s.lengths.mismatch().abs() < 0.01, "{:?}", s.lengths);
+            // Length on panel 0's side.
+            if s.pair.left.panel == 0 {
+                s.lengths.left
+            } else {
+                s.lengths.right
+            }
+        };
+        let equal = run(None);
+        let p0_stiff = run(Some(vec![3.0, 1.0]));
+        let p1_stiff = run(Some(vec![1.0, 3.0]));
+        assert!((equal - 136.0).abs() < 0.1, "{equal}");
+        assert!(
+            p0_stiff < equal - 3.0 && (p0_stiff - 132.0).abs() < 0.1,
+            "{p0_stiff}"
+        );
+        assert!(
+            p1_stiff > equal + 3.0 && (p1_stiff - 140.0).abs() < 0.1,
+            "{p1_stiff}"
+        );
+        assert!(flatten_garment(
+            &m,
+            &seams,
+            &FlattenOptions {
+                panel_stiffness: Some(vec![1.0]),
+                ..Default::default()
+            }
+        )
+        .is_err());
     }
 }
