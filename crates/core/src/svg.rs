@@ -18,6 +18,7 @@
 //! interpolated linearly in sRGB.
 
 use crate::flatten::FlatPanel;
+use crate::pattern::PatternPiece;
 use crate::strain::PrincipalStretch;
 use glam::DVec2;
 use std::fmt::Write;
@@ -69,7 +70,8 @@ pub struct SvgOptions {
 }
 
 /// A label along a chain of boundary edges, placed at its arc-length
-/// midpoint, just inside the piece and parallel to the edge.
+/// midpoint, 10 mm inside the piece (clear of notch numbers) and parallel to
+/// the edge.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EdgeLabel {
     /// Indices into the panel's `boundary`, in order.
@@ -107,11 +109,17 @@ pub fn stretch_color(t: f64, range: f64, exponent: f64) -> String {
 }
 
 /// Render one flattened panel as a standalone SVG document.
-pub fn panel_svg(fp: &FlatPanel, opts: &SvgOptions) -> String {
+///
+/// The solid line is the cut line (seam line plus allowance); where an
+/// allowance exists the seam/glue line is drawn dashed inside it. Notches
+/// are ticks across the seam line labelled with their number.
+pub fn panel_svg(fp: &FlatPanel, piece: &PatternPiece, opts: &SvgOptions) -> String {
     // Flip y so the piece reads correctly in SVG's y-down space.
-    let pts: Vec<DVec2> = fp.uv.iter().map(|p| DVec2::new(p.x, -p.y)).collect();
+    let flip = |p: DVec2| DVec2::new(p.x, -p.y);
+    let pts: Vec<DVec2> = fp.uv.iter().map(|&p| flip(p)).collect();
+    let cut: Vec<DVec2> = piece.cut_outline.iter().map(|&p| flip(p)).collect();
     let (mut lo, mut hi) = (DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY));
-    for p in &pts {
+    for p in pts.iter().chain(&cut) {
         lo = lo.min(*p);
         hi = hi.max(*p);
     }
@@ -177,17 +185,46 @@ pub fn panel_svg(fp: &FlatPanel, opts: &SvgOptions) -> String {
         let _ = writeln!(s, "</g>");
     }
 
-    // Outline along the boundary loop.
-    let mut d = String::new();
-    for (k, e) in fp.panel.boundary.iter().enumerate() {
-        let p = pts[e.from as usize];
-        let _ = write!(d, "{}{:.3} {:.3}", if k == 0 { "M" } else { "L" }, p.x, p.y);
-    }
-    d.push('Z');
+    // Cut line.
     let _ = writeln!(
         s,
-        r#"<path id="outline" d="{d}" fill="none" stroke="black" stroke-width="0.3" stroke-linejoin="round"/>"#
+        r#"<path id="cut-line" d="{}" fill="none" stroke="black" stroke-width="0.3" stroke-linejoin="round"/>"#,
+        closed_path(&cut)
     );
+    // Seam (glue) line wherever it differs from the cut line.
+    if piece.edge_allowance.iter().any(|&d| d > 0.0) {
+        let mut d = String::new();
+        for (k, e) in fp.panel.boundary.iter().enumerate() {
+            if piece.edge_allowance[k] > 0.0 {
+                let (a, b) = (pts[e.from as usize], pts[e.to as usize]);
+                let _ = write!(d, "M{:.3} {:.3}L{:.3} {:.3}", a.x, a.y, b.x, b.y);
+            }
+        }
+        let _ = writeln!(
+            s,
+            r#"<path id="seam-line" d="{d}" fill="none" stroke="black" stroke-width="0.2" stroke-dasharray="2 1"/>"#
+        );
+    }
+    if !piece.notches.is_empty() {
+        let _ = writeln!(
+            s,
+            r#"<g id="notches" stroke="black" stroke-width="0.3" font-family="sans-serif" font-size="2.5" text-anchor="middle">"#
+        );
+        for n in &piece.notches {
+            let out = piece.edge_allowance[n.boundary_edge].max(2.0);
+            let (a, b) = (
+                flip(n.position - 4.0 * n.normal),
+                flip(n.position + out * n.normal),
+            );
+            let t = flip(n.position - 6.5 * n.normal);
+            let _ = writeln!(
+                s,
+                r#"<path d="M{:.3} {:.3}L{:.3} {:.3}"/><text x="{:.3}" y="{:.3}" stroke="none" dominant-baseline="middle">{}</text>"#,
+                a.x, a.y, b.x, b.y, t.x, t.y, n.number
+            );
+        }
+        let _ = writeln!(s, "</g>");
+    }
 
     if !opts.edge_labels.is_empty() {
         let _ = writeln!(
@@ -197,8 +234,8 @@ pub fn panel_svg(fp: &FlatPanel, opts: &SvgOptions) -> String {
         for l in &opts.edge_labels {
             if let Some((p, dir)) = edge_chain_midpoint(fp, &l.edges) {
                 // Interior is to the left of the boundary direction.
-                let q = p + 3.0 * dir.perp();
-                // To SVG space (y flipped); keep the text upright.
+                let q = p + 10.0 * dir.perp(); // beyond notch numbers (6.5 mm)
+                                               // To SVG space (y flipped); keep the text upright.
                 let mut a = (-dir.y).atan2(dir.x).to_degrees();
                 if a > 90.0 {
                     a -= 180.0;
@@ -279,6 +316,15 @@ fn edge_chain_midpoint(fp: &FlatPanel, edges: &[usize]) -> Option<(DVec2, DVec2)
     None
 }
 
+fn closed_path(pts: &[DVec2]) -> String {
+    let mut d = String::new();
+    for (k, p) in pts.iter().enumerate() {
+        let _ = write!(d, "{}{:.3} {:.3}", if k == 0 { "M" } else { "L" }, p.x, p.y);
+    }
+    d.push('Z');
+    d
+}
+
 fn escape(t: &str) -> String {
     t.replace('&', "&amp;")
         .replace('<', "&lt;")
@@ -307,6 +353,7 @@ mod tests {
             .panels[0];
         let svg = panel_svg(
             fp,
+            &PatternPiece::plain(fp),
             &SvgOptions {
                 heatmap: Some(HeatmapMetric::AreaStretch),
                 label: Some("A&B".into()),
@@ -315,7 +362,8 @@ mod tests {
         );
         // 100 mm × 0.85 wide piece + 2 × 10 mm margin.
         assert!(svg.contains(r#"width="105.000mm""#), "{}", &svg[..300]);
-        assert!(svg.contains(r#"id="outline""#));
+        assert!(svg.contains(r#"id="cut-line""#));
+        assert!(!svg.contains(r#"id="seam-line""#));
         assert_eq!(svg.matches("stroke=\"#").count(), m.triangles().len());
         assert!(svg.contains("A&amp;B"));
     }

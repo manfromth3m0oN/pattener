@@ -37,6 +37,7 @@ pub mod lscm;
 pub mod mesh;
 pub mod obj;
 pub mod panel;
+pub mod pattern;
 pub mod seam_match;
 pub mod seams;
 pub mod strain;

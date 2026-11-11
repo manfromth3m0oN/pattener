@@ -9,6 +9,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use latexpat_core::arap::ArapOptions;
 use latexpat_core::glam::DVec3;
 use latexpat_core::obj::parse_obj;
+use latexpat_core::pattern::{build_pattern, PatternOptions};
 use latexpat_core::svg::{panel_svg, EdgeLabel, HeatmapMetric, SvgOptions};
 use latexpat_core::{
     flatten_garment, Ease, FlatPanel, FlattenOptions, SeamMatching, SeamReport, SeamSet,
@@ -194,6 +195,7 @@ fn flatten(args: FlattenArgs) -> Result<()> {
     };
     let garment = flatten_garment(&mesh, &seams, &opts)?;
     let panels = &garment.panels;
+    let pieces = build_pattern(&garment, &seams, &PatternOptions::default());
 
     fs::create_dir_all(&args.output)
         .with_context(|| format!("creating {}", args.output.display()))?;
@@ -224,6 +226,7 @@ fn flatten(args: FlattenArgs) -> Result<()> {
         };
         let svg = panel_svg(
             fp,
+            &pieces[i],
             &SvgOptions {
                 heatmap,
                 range: args.heatmap_range,
