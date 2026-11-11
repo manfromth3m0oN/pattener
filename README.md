@@ -10,7 +10,11 @@ layout but low, even strain, which the tool measures and reports.
 
 ## Web app
 
-Everything also runs in the browser (WebAssembly, no server-side code):
+Everything also runs in the browser (WebAssembly, no server-side code).
+Every push to `main` deploys it to GitHub Pages:
+https://manfromth3m0on.github.io/pattener/
+
+To run it locally:
 
 ```sh
 web/build.sh                          # needs: rustup target add wasm32-unknown-unknown
@@ -141,6 +145,14 @@ works out the wearing tension of the reference fit, and gives every sheet
 the ease that produces that same tension. Seams joining different sheets
 settle where the two tensions balance, nearer the thicker side.
 `tests/data/swatches.json` is a synthetic example, not real measurements.
+
+## Continuous integration
+
+`.github/workflows/ci.yml` runs on every pull request and push to `main`:
+`cargo fmt --check`, `clippy` and `rustdoc` with warnings as errors, all
+tests, the WebAssembly build of the core and of the web app, and the
+Playwright smoke test of the page. On `main` it then publishes the web app
+to GitHub Pages (Settings → Pages → Source must be "GitHub Actions").
 
 ## Layout
 
