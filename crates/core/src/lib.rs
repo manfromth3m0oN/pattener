@@ -34,6 +34,7 @@ pub mod obj;
 pub mod panel;
 pub mod seams;
 pub mod strain;
+pub mod svg;
 pub mod testmesh;
 
 pub use error::{Error, Result};
