@@ -7,11 +7,12 @@
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use latexpat_core::arap::ArapOptions;
+use latexpat_core::body::{torso, BodyMeasurements, BodyOptions, SeamStyle};
 use latexpat_core::calibrate::{calibrate, Calibration, CalibrationResult, SheetFit};
 use latexpat_core::glam::DVec3;
 use latexpat_core::job::{self, EaseSpec, JobOptions, JobOutput, Report};
 use latexpat_core::nest::NestOptions;
-use latexpat_core::obj::parse_obj;
+use latexpat_core::obj::{parse_obj, write_obj};
 use latexpat_core::pattern::PatternOptions;
 use latexpat_core::seams::AllowanceSide;
 use latexpat_core::svg::HeatmapMetric;
@@ -38,6 +39,34 @@ enum Command {
     Flatten(FlattenArgs),
     /// Fit swatch stretch tests and print the ease for each latex sheet.
     Calibrate(CalibrateArgs),
+    /// Generate a torso mesh and seams from body measurements.
+    Body(BodyArgs),
+}
+
+#[derive(clap::Args)]
+struct BodyArgs {
+    /// Measurements file: {"levels": [{"name", "height_mm", "circumference_mm"}, ...]}, bottom to top.
+    measurements: PathBuf,
+    /// Output directory (writes body.obj and body.seams.json).
+    #[arg(short, long)]
+    output: PathBuf,
+    /// Seam layout.
+    #[arg(long, value_enum, default_value_t = Style::Princess)]
+    style: Style,
+    /// Vertices around each ring (multiple of 4).
+    #[arg(long, default_value_t = 64)]
+    around: u32,
+    /// Maximum distance between rings (mm).
+    #[arg(long, default_value_t = 10.0)]
+    ring_spacing: f64,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum Style {
+    /// Side seams only: front and back.
+    Tube,
+    /// Side seams and princess lines: six panels.
+    Princess,
 }
 
 #[derive(clap::Args)]
@@ -180,7 +209,48 @@ fn main() -> Result<()> {
     match Cli::parse().command {
         Command::Flatten(args) => flatten(args),
         Command::Calibrate(args) => calibrate_cmd(args),
+        Command::Body(args) => body_cmd(args),
     }
+}
+
+fn body_cmd(args: BodyArgs) -> Result<()> {
+    let t = fs::read_to_string(&args.measurements)
+        .with_context(|| format!("reading {}", args.measurements.display()))?;
+    let m: BodyMeasurements = serde_json::from_str(&t)
+        .with_context(|| format!("parsing {}", args.measurements.display()))?;
+    let b = torso(
+        &m,
+        &BodyOptions {
+            around: args.around,
+            ring_spacing_mm: args.ring_spacing,
+            style: match args.style {
+                Style::Tube => SeamStyle::Tube,
+                Style::Princess => SeamStyle::Princess,
+            },
+        },
+    )?;
+    fs::create_dir_all(&args.output)
+        .with_context(|| format!("creating {}", args.output.display()))?;
+    let (obj, seams) = (
+        args.output.join("body.obj"),
+        args.output.join("body.seams.json"),
+    );
+    write(&obj, &write_obj(&b.mesh))?;
+    write(&seams, &serde_json::to_string_pretty(&b.seams)?)?;
+    println!(
+        "torso: {} vertices, {} triangles, {} seams; levels on rings {:?}",
+        b.mesh.positions().len(),
+        b.mesh.triangles().len(),
+        b.seams.seams.len(),
+        b.level_rings
+    );
+    println!("wrote {} and {}", obj.display(), seams.display());
+    println!(
+        "next: latexpat flatten {} --seams {} -o pattern/",
+        obj.display(),
+        seams.display()
+    );
+    Ok(())
 }
 
 fn load_calibration(path: &Path) -> Result<CalibrationResult> {
@@ -350,13 +420,13 @@ fn write_job(dir: &Path, mesh: &str, scale: f64, out: &JobOutput) -> Result<()> 
     if !r.seams.is_empty() {
         println!();
         println!(
-            "{:<16} {:>9} {:>9} {:>9} {:>9} {:>17}",
+            "{:<22} {:>9} {:>9} {:>9} {:>9} {:>17}",
             "seam", "panels", "body", "left", "right", "mismatch (mm)"
         );
     }
     for s in &r.seams {
         println!(
-            "{:<16} {:>9} {:>9.1} {:>9.1} {:>9.1} {:>+8.2} (was {:+.2})",
+            "{:<22} {:>9} {:>9.1} {:>9.1} {:>9.1} {:>+8.2} (was {:+.2})",
             s.seam,
             format!("{}↔{}", s.left_panel, s.right_panel),
             s.body_length_mm,

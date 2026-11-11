@@ -1,0 +1,10 @@
+{
+  "comment": "Example torso measurements (mm), bottom to top. Heights are above the hip line. Not a real person.",
+  "levels": [
+    { "name": "hip",       "height_mm": 0,   "circumference_mm": 980 },
+    { "name": "waist",     "height_mm": 200, "circumference_mm": 740 },
+    { "name": "underbust", "height_mm": 330, "circumference_mm": 790 },
+    { "name": "bust",      "height_mm": 420, "circumference_mm": 940, "front_bias": 0.6 },
+    { "name": "chest",     "height_mm": 500, "circumference_mm": 900 }
+  ]
+}
