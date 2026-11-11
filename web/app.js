@@ -88,6 +88,7 @@ function writeBody(body) {
     $(`m-${key}`).value = mm === undefined ? '' : +(mm / UNIT_MM[units]).toFixed(units === 'mm' ? 0 : 1);
   }
   for (const [k] of SHAPES) $(`s-${k}`).value = body.shape?.[k] ?? 0;
+  if (typeof syncFigure === 'function') syncFigure();
 }
 $('units').onchange = () => {
   const body = readBody();
@@ -605,6 +606,35 @@ const EXAMPLE_BODY = {
   measurements: { height: 1680, bust: 940, underbust: 790, waist: 740, hips: 980, thigh: 570 },
   shape: {},
 };
+// Typical starting measurements for each figure (mm).
+const EXAMPLE_BODIES = {
+  women: EXAMPLE_BODY,
+  men: { measurements: { height: 1780, bust: 1000, waist: 850, hips: 980, thigh: 560 }, shape: { body_type: 1 } },
+};
+// Women's / Men's: sets the body type and, if the measurements are empty or
+// still the other figure's example, that figure's typical measurements.
+function figure() { return Number($('s-body_type').value) >= 0.5 ? 'men' : 'women'; }
+function syncFigure() {
+  const f = figure();
+  document.querySelectorAll('input[name=figure]').forEach((r) => { r.checked = r.value === f; });
+}
+document.querySelectorAll('input[name=figure]').forEach((r) => {
+  r.onchange = () => {
+    if (!r.checked) return;
+    const want = r.value, other = want === 'men' ? 'women' : 'men';
+    const body = readBody();
+    const same = (a, b) => JSON.stringify(Object.entries(a).sort()) === JSON.stringify(Object.entries(b).sort());
+    const m = body.measurements;
+    if (!Object.keys(m).length || same(m, EXAMPLE_BODIES[other].measurements)) {
+      body.measurements = { ...EXAMPLE_BODIES[want].measurements };
+    }
+    body.shape.body_type = want === 'men' ? 1 : 0;
+    writeBody(body);
+    saveLocal();
+    fitBody();
+  };
+});
+$('s-body_type').addEventListener('input', syncFigure);
 function readProject() {
   return { version: 1, name: $('project-name').value.trim() || 'Untitled', body: readBody(), garment: design, materials, units };
 }
@@ -651,7 +681,7 @@ $('project-open').onchange = async () => {
 };
 $('project-new').onclick = () => {
   if (!confirm('Start a new project? Unsaved changes to this one will be lost.')) return;
-  writeProject({ name: 'Untitled', body: { measurements: {}, shape: {} }, garment: { curves: [], inside: null, zones: [], sheet_assignments: [] }, materials: DEFAULT_SHEETS(), units });
+  writeProject({ name: 'Untitled', body: { measurements: {}, shape: { body_type: figure() === 'men' ? 1 : 0 } }, garment: { curves: [], inside: null, zones: [], sheet_assignments: [] }, materials: DEFAULT_SHEETS(), units });
   saveLocal();
   fitBody();
 };

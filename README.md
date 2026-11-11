@@ -33,6 +33,12 @@ with the tape positions on it. Body type, muscle, cup, belly and buttocks
 are set by eye. Projects (name, measurements, shape, units) save to a
 `.latexpat.json` file and autosave in the browser.
 
+**Women's or men's figure.** The body model blends a feminine and a
+masculine base shape. Pick **Women's** or **Men's** to start from that
+figure, with typical measurements if you haven't entered your own. The
+**Body type** slider sets anything in between. Every template builds on
+both figures (this is tested).
+
 ```sh
 latexpat human tests/data/project.json -o body/   # body.obj + measurements.json
 ```

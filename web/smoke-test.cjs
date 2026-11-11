@@ -185,6 +185,18 @@ const done = (p) => p.waitForFunction(
   await done(page);
   assert.match(await page.textContent('#status'), /Done .*2 panels/);
 
+  // 4. Men's figure: typical measurements, a clean fit, and a template that
+  // builds on it.
+  await page.check('input[name=source][value=human]');
+  await page.check('input[name=figure][value=men]');
+  await page.waitForFunction(() => /Fitted/.test(document.getElementById('fit-status').textContent), null, { timeout: 90000 });
+  assert.equal(await page.inputValue('#s-body_type'), '1');
+  assert.equal(await page.inputValue('#m-height'), '178');
+  assert.equal(await page.locator('#fit-warnings li').count(), 0);
+  await page.selectOption('#g-template', 'leggings');
+  await page.click('#g-example');
+  await page.waitForFunction(() => /2 flat pieces/.test(document.getElementById('g-status').textContent), null, { timeout: 90000 });
+
   assert.deepEqual(errors, []);
   await browser.close();
   console.log('web smoke test passed');

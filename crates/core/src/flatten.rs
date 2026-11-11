@@ -426,11 +426,24 @@ pub fn flatten_garment(mesh: &Mesh, seams: &SeamSet, opts: &FlattenOptions) -> R
         for e in &fp.panel.boundary {
             pinned[e.from as usize] = true;
         }
-        let r = arap_pinned(&fp.panel, refs, &init, &opts.arap, &[], &pinned)?;
-        // Keep the smoothed piece only if it folds no more than before.
-        let flips = measure(&fp.panel, &r.uv).flipped.len();
-        if flips <= fp.strain.flipped.len() {
-            fp.uv = r.uv;
+        // Keep the smoothed piece only if it folds no more than before and
+        // its worst triangle stays within 1.5× of what it was (a small
+        // triangle on the outline can otherwise be crushed); else try
+        // gentler smoothing.
+        let (flips0, max0) = (fp.strain.flipped.len(), fp.strain.max_stretch);
+        for f in [1.0, 0.5, 0.25] {
+            let start: Vec<DVec2> = fp
+                .uv
+                .iter()
+                .zip(&init)
+                .map(|(a, b)| a.lerp(*b, f))
+                .collect();
+            let r = arap_pinned(&fp.panel, refs, &start, &opts.arap, &[], &pinned)?;
+            let s = measure(&fp.panel, &r.uv);
+            if s.flipped.len() <= flips0 && s.max_stretch <= 1.5 * max0 {
+                fp.uv = r.uv;
+                break;
+            }
         }
     }
     let mirrored = match &opts.mirror {
