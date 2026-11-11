@@ -19,8 +19,10 @@
 //! piece and `from + (1 − f)(to − from)` on the right piece (whose boundary
 //! runs the other way). Automatic notches split a seam of body length `L`
 //! into `round(L / spacing)` equal parts; explicit notch vertices from the
-//! seam file are added at `f = 0` or `1` of their edge. Latex should not be
-//! snipped (cuts start tears), so notches are drawn as pen marks.
+//! seam file are added at `f = 0` or `1` of their edge and take priority:
+//! automatic notches within `spacing / 4` of an explicit one are dropped.
+//! Latex should not be snipped (cuts start tears), so notches are drawn as
+//! pen marks.
 
 use crate::allowance::{is_simple, offset_polygon};
 use crate::flatten::{FlatPanel, Garment};
@@ -178,18 +180,17 @@ pub fn build_pattern(
         let total = *cum.last().unwrap();
 
         // Positions as (edge k, fraction f).
+        let tau_of = |(k, f): (usize, f64)| cum[k] + f * body[k];
+        let to_edge = |tau: f64| {
+            let k = cum
+                .partition_point(|&c| c <= tau)
+                .saturating_sub(1)
+                .min(body.len() - 1);
+            (k, ((tau - cum[k]) / body[k]).clamp(0.0, 1.0))
+        };
+
+        // Explicit notches first: they mark landmarks (e.g. the waist).
         let mut at: Vec<(usize, f64)> = Vec::new();
-        if let Some(spacing) = opts.notch_spacing.filter(|s| *s > 0.0) {
-            let parts = (total / spacing).round() as usize;
-            for j in 1..parts {
-                let tau = total * j as f64 / parts as f64;
-                let k = cum
-                    .partition_point(|&c| c <= tau)
-                    .saturating_sub(1)
-                    .min(body.len() - 1);
-                at.push((k, ((tau - cum[k]) / body[k]).clamp(0.0, 1.0)));
-            }
-        }
         let origin = &lp.panel.vertex_origin;
         for &v in &seams.seams[p.seam as usize].notches {
             for (k, &b) in p.left.edges.iter().enumerate() {
@@ -201,10 +202,20 @@ pub fn build_pattern(
                 }
             }
         }
-        at.sort_by(|a, b| (cum[a.0] + a.1 * body[a.0]).total_cmp(&(cum[b.0] + b.1 * body[b.0])));
-        at.dedup_by(|a, b| {
-            ((cum[a.0] + a.1 * body[a.0]) - (cum[b.0] + b.1 * body[b.0])).abs() < 1.0
-        });
+        // Automatic notches, skipping any within a quarter spacing of an
+        // explicit one so two marks never sit side by side.
+        if let Some(spacing) = opts.notch_spacing.filter(|s| *s > 0.0) {
+            let explicit: Vec<f64> = at.iter().map(|&a| tau_of(a)).collect();
+            let parts = (total / spacing).round() as usize;
+            for j in 1..parts {
+                let tau = total * j as f64 / parts as f64;
+                if explicit.iter().all(|e| (e - tau).abs() >= 0.25 * spacing) {
+                    at.push(to_edge(tau));
+                }
+            }
+        }
+        at.sort_by(|&a, &b| tau_of(a).total_cmp(&tau_of(b)));
+        at.dedup_by(|a, b| (tau_of(*a) - tau_of(*b)).abs() < 1.0);
 
         for (k, f) in at {
             number += 1;
@@ -320,5 +331,27 @@ mod tests {
         for (h, e) in heights.iter().zip([40.0, 160.0 / 3.0, 320.0 / 3.0]) {
             assert_relative_eq!(*h, e, epsilon = 1e-6);
         }
+    }
+
+    #[test]
+    fn explicit_notch_replaces_nearby_automatic_one() {
+        // Explicit notch at vertex (5, 3) = 38, i.e. 60 mm up: within 12.5 mm
+        // of the automatic notch at 53.3 mm, which is dropped.
+        let (g, set) = split_grid(centre(vec![38], None));
+        let pieces = build_pattern(&g, &set, &PatternOptions::default());
+        let ymin = g.panels[0]
+            .uv
+            .iter()
+            .map(|p| p.y)
+            .fold(f64::INFINITY, f64::min);
+        let mut h: Vec<f64> = pieces[0]
+            .notches
+            .iter()
+            .map(|n| n.position.y - ymin)
+            .collect();
+        h.sort_by(f64::total_cmp);
+        assert_eq!(h.len(), 2, "{h:?}");
+        assert_relative_eq!(h[0], 60.0, epsilon = 1e-6);
+        assert_relative_eq!(h[1], 320.0 / 3.0, epsilon = 1e-6);
     }
 }
