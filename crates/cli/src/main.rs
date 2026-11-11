@@ -7,6 +7,8 @@
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use latexpat_core::arap::ArapOptions;
+use latexpat_core::calibrate::{calibrate, Calibration, CalibrationResult, SheetFit};
+use latexpat_core::cut::cut_panels;
 use latexpat_core::glam::{DVec2, DVec3};
 use latexpat_core::nest::{nest, Layout, NestOptions};
 use latexpat_core::obj::parse_obj;
@@ -32,9 +34,21 @@ struct Cli {
 }
 
 #[derive(Subcommand)]
+#[allow(clippy::large_enum_variant)] // parsed once; boxing buys nothing
 enum Command {
     /// Cut a body mesh along seams and flatten each panel to an SVG pattern.
     Flatten(FlattenArgs),
+    /// Fit swatch stretch tests and print the ease for each latex sheet.
+    Calibrate(CalibrateArgs),
+}
+
+#[derive(clap::Args)]
+struct CalibrateArgs {
+    /// Swatch file: {"sheets": [{"name", "thickness_mm", "samples": [...]}], "target": ...}.
+    file: PathBuf,
+    /// Also print the ease for these untested thicknesses (mm), from the pooled fit.
+    #[arg(long)]
+    thickness: Vec<f64>,
 }
 
 #[derive(clap::Args)]
@@ -44,9 +58,19 @@ struct FlattenArgs {
     /// Seam file: {"seams": [{"name": "...", "vertices": [0-based OBJ vertex indices]}]}.
     #[arg(long)]
     seams: Option<PathBuf>,
-    /// Ease factor s: flat edge length = s × body edge length.
-    #[arg(long, default_value_t = 0.85)]
-    ease: f64,
+    /// Ease factor s: flat edge length = s × body edge length (default 0.85).
+    #[arg(long, conflicts_with = "calibration")]
+    ease: Option<f64>,
+    /// Swatch calibration file; the ease then comes from the chosen sheet.
+    #[arg(long, requires = "sheet")]
+    calibration: Option<PathBuf>,
+    /// Sheet for all panels: a sheet name from the calibration file, or a
+    /// thickness such as 0.5mm (uses the pooled fit).
+    #[arg(long, requires = "calibration")]
+    sheet: Option<String>,
+    /// Use a different sheet for one panel, e.g. --panel-sheet 2=0.6mm (repeatable).
+    #[arg(long, value_name = "PANEL=SHEET", requires = "calibration")]
+    panel_sheet: Vec<String>,
     /// Output directory.
     #[arg(short, long)]
     output: PathBuf,
@@ -157,8 +181,8 @@ enum Heatmap {
 #[derive(Serialize)]
 struct Report {
     mesh: String,
-    ease: f64,
     scale: f64,
+    calibration: Option<CalibrationResult>,
     panels: Vec<PanelReport>,
     seams: Vec<SeamPairReport>,
     layout: Option<LayoutReport>,
@@ -190,6 +214,8 @@ struct SeamPairReport {
 struct PanelReport {
     index: usize,
     file: String,
+    sheet: Option<String>,
+    ease: f64,
     seams: Vec<String>,
     vertices: usize,
     triangles: usize,
@@ -210,13 +236,78 @@ struct PanelReport {
 fn main() -> Result<()> {
     match Cli::parse().command {
         Command::Flatten(args) => flatten(args),
+        Command::Calibrate(args) => calibrate_cmd(args),
     }
 }
 
-fn flatten(args: FlattenArgs) -> Result<()> {
-    if !(args.ease > 0.0 && args.ease.is_finite()) {
-        bail!("--ease must be a positive number");
+/// Ease spec, per-panel stiffness, and per-panel (ease, sheet label).
+type PanelSetup = (Ease, Option<Vec<f64>>, Vec<(f64, Option<String>)>);
+
+fn load_calibration(path: &Path) -> Result<CalibrationResult> {
+    let t = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let c: Calibration =
+        serde_json::from_str(&t).with_context(|| format!("parsing {}", path.display()))?;
+    Ok(calibrate(&c)?)
+}
+
+fn calibrate_cmd(args: CalibrateArgs) -> Result<()> {
+    let r = load_calibration(&args.file)?;
+    println!("target wearing tension: {:.3} N/cm", r.tension_n_per_cm);
+    println!();
+    println!(
+        "{:<20} {:>9} {:>10} {:>9} {:>7}",
+        "sheet", "t (mm)", "μ (MPa)", "fit err", "ease"
+    );
+    for s in &r.sheets {
+        println!(
+            "{:<20} {:>9.3} {:>10.3} {:>8.1}% {:>7.3}",
+            s.name,
+            s.thickness_mm,
+            s.shear_modulus_mpa,
+            100.0 * s.relative_error,
+            s.ease
+        );
+        warn_fit(s);
     }
+    println!();
+    println!(
+        "pooled μ = {:.3} MPa (all sheets together)",
+        r.pooled_shear_modulus_mpa
+    );
+    for t in args.thickness {
+        println!("  {t:.3} mm → ease {:.3}", r.ease_for_thickness(t)?);
+    }
+    Ok(())
+}
+
+fn warn_fit(s: &SheetFit) {
+    if s.relative_error > 0.1 {
+        eprintln!(
+            "warning: sheet '{}' fits the rubber model poorly ({:.0}% error); re-check its measurements",
+            s.name,
+            100.0 * s.relative_error
+        );
+    }
+}
+
+/// Resolve a sheet name, or a thickness like "0.5mm", to (ease, stiffness μt, label).
+fn resolve_sheet(r: &CalibrationResult, spec: &str) -> Result<(f64, f64, String)> {
+    if let Some(s) = r.sheet(spec) {
+        return Ok((s.ease, s.shear_modulus_mpa * s.thickness_mm, s.name.clone()));
+    }
+    let num = spec.trim().trim_end_matches("mm").trim();
+    if let Ok(t) = num.parse::<f64>() {
+        return Ok((
+            r.ease_for_thickness(t)?,
+            r.pooled_shear_modulus_mpa * t,
+            format!("{t} mm (pooled fit)"),
+        ));
+    }
+    let names: Vec<&str> = r.sheets.iter().map(|s| s.name.as_str()).collect();
+    bail!("unknown sheet '{spec}'; use one of {names:?} or a thickness such as 0.5mm")
+}
+
+fn flatten(args: FlattenArgs) -> Result<()> {
     if !(args.scale > 0.0 && args.scale.is_finite()) {
         bail!("--scale must be a positive number");
     }
@@ -246,8 +337,51 @@ fn flatten(args: FlattenArgs) -> Result<()> {
         None => SeamSet::default(),
     };
 
+    // Ease (and stiffness) per panel: uniform, or from the calibrated sheets.
+    let n_panels = cut_panels(&mesh, &seams.resolve(&mesh)?)?.len();
+    let mut calibration = None;
+    let (ease, stiffness, panel_sheets): PanelSetup = match &args.calibration {
+        None => {
+            let e = args.ease.unwrap_or(0.85);
+            if !(e > 0.0 && e.is_finite()) {
+                bail!("--ease must be a positive number");
+            }
+            (Ease::Uniform(e), None, vec![(e, None); n_panels])
+        }
+        Some(path) => {
+            let r = load_calibration(path)?;
+            r.sheets.iter().for_each(warn_fit);
+            let default = args.sheet.as_deref().expect("clap requires --sheet");
+            let mut specs = vec![default.to_string(); n_panels];
+            for ps in &args.panel_sheet {
+                let (i, name) = ps
+                    .split_once('=')
+                    .with_context(|| format!("--panel-sheet '{ps}' must look like 2=0.6mm"))?;
+                let i: usize = i
+                    .trim()
+                    .parse()
+                    .with_context(|| format!("bad panel index in '{ps}'"))?;
+                if i >= n_panels {
+                    bail!("--panel-sheet: panel {i} does not exist (the seams make {n_panels} panels)");
+                }
+                specs[i] = name.to_string();
+            }
+            let mut eases = Vec::new();
+            let mut k = Vec::new();
+            let mut info = Vec::new();
+            for spec in &specs {
+                let (e, stiff, label) = resolve_sheet(&r, spec)?;
+                eases.push(e);
+                k.push(stiff);
+                info.push((e, Some(label)));
+            }
+            calibration = Some(r);
+            (Ease::per_panel(&mesh, &seams, &eases)?, Some(k), info)
+        }
+    };
+
     let opts = FlattenOptions {
-        ease: Ease::Uniform(args.ease),
+        ease,
         arap: ArapOptions {
             max_iterations: args.max_iterations,
             tolerance: args.tolerance,
@@ -257,7 +391,7 @@ fn flatten(args: FlattenArgs) -> Result<()> {
             weight: args.seam_weight,
             ..Default::default()
         }),
-        panel_stiffness: None,
+        panel_stiffness: stiffness,
     };
     let garment = flatten_garment(&mesh, &seams, &opts)?;
     let panels = &garment.panels;
@@ -282,15 +416,15 @@ fn flatten(args: FlattenArgs) -> Result<()> {
 
     let mut report = Report {
         mesh: args.mesh.display().to_string(),
-        ease: args.ease,
         scale: args.scale,
+        calibration,
         panels: vec![],
         seams: vec![],
         layout: None,
     };
     println!(
-        "{:<10} {:>6} {:>9} {:>9} {:>9} {:>17}  seams",
-        "panel", "tris", "min σ", "max σ", "area ×", "size (mm)"
+        "{:<10} {:>6} {:>6} {:>9} {:>9} {:>9} {:>17}  seams",
+        "panel", "tris", "ease", "min σ", "max σ", "area ×", "size (mm)"
     );
     for (i, fp) in panels.iter().enumerate() {
         let names = seam_names(fp, &seams);
@@ -321,9 +455,10 @@ fn flatten(args: FlattenArgs) -> Result<()> {
         };
         let s = &fp.strain;
         println!(
-            "{:<10} {:>6} {:>9.4} {:>9.4} {:>9.4} {:>8.1} × {:<6.1}  {}",
+            "{:<10} {:>6} {:>6.3} {:>9.4} {:>9.4} {:>9.4} {:>8.1} × {:<6.1}  {}",
             i,
             fp.panel.triangles.len(),
+            panel_sheets[i].0,
             s.min_stretch,
             s.max_stretch,
             s.mean_area_stretch,
@@ -346,6 +481,8 @@ fn flatten(args: FlattenArgs) -> Result<()> {
         report.panels.push(PanelReport {
             index: i,
             file,
+            sheet: panel_sheets[i].1.clone(),
+            ease: panel_sheets[i].0,
             seams: names,
             vertices: fp.panel.vertex_count(),
             triangles: fp.panel.triangles.len(),

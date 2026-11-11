@@ -146,3 +146,92 @@ fn allowance_notches_and_layout() {
     assert!(String::from_utf8_lossy(&o.stderr).contains("does not fit a 80 mm sheet"));
     std::fs::remove_dir_all(&out).unwrap();
 }
+
+#[test]
+fn calibrate_command_prints_ease_per_sheet() {
+    let o = Command::new(env!("CARGO_BIN_EXE_latexpat"))
+        .arg("calibrate")
+        .arg(data("swatches.json"))
+        .args(["--thickness", "0.5"])
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let out = String::from_utf8_lossy(&o.stdout);
+    // The reference sheet keeps its ease; thicker sheets get less reduction.
+    let ease = |name: &str| -> f64 {
+        out.lines()
+            .find(|l| l.starts_with(name))
+            .and_then(|l| l.split_whitespace().last())
+            .unwrap()
+            .parse()
+            .unwrap()
+    };
+    assert_eq!(ease("0.40mm black"), 0.85);
+    assert!(
+        ease("0.25mm black") < 0.85 && ease("0.60mm black") > 0.85,
+        "{out}"
+    );
+    assert!(out.contains("0.500 mm → ease"));
+}
+
+#[test]
+fn flatten_with_calibrated_sheets() {
+    let out = std::env::temp_dir().join(format!("latexpat-cli-test-m4-{}", std::process::id()));
+    let run = |extra: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_latexpat"))
+            .arg("flatten")
+            .arg(data("grid.obj"))
+            .arg("--seams")
+            .arg(data("grid.seams.json"))
+            .arg("-o")
+            .arg(&out)
+            .args(extra)
+            .output()
+            .unwrap()
+    };
+    let cal = data("swatches.json");
+    let cal = cal.to_str().unwrap();
+    let o = run(&[
+        "--calibration",
+        cal,
+        "--sheet",
+        "0.40mm black",
+        "--panel-sheet",
+        "1=0.60mm black",
+    ]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let r: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(out.join("report.json")).unwrap()).unwrap();
+    assert_eq!(r["panels"][0]["sheet"], "0.40mm black");
+    assert_eq!(r["panels"][1]["sheet"], "0.60mm black");
+    let (e0, e1) = (
+        r["panels"][0]["ease"].as_f64().unwrap(),
+        r["panels"][1]["ease"].as_f64().unwrap(),
+    );
+    assert!((e0 - 0.85).abs() < 1e-9 && e1 > 0.88, "{e0} {e1}");
+    // The seam settles nearer the stiffer (thicker) side's natural length.
+    let seam = &r["seams"][0];
+    let len = seam["left_length_mm"].as_f64().unwrap();
+    let mid = 0.5 * 160.0 * (e0 + e1);
+    assert!(len > mid, "{len} vs plain mean {mid}");
+
+    // A thickness instead of a name uses the pooled fit.
+    let o = run(&["--calibration", cal, "--sheet", "0.5mm"]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+
+    // Bad combinations.
+    let o = run(&["--calibration", cal, "--sheet", "nope"]);
+    assert!(String::from_utf8_lossy(&o.stderr).contains("unknown sheet 'nope'"));
+    let o = run(&["--calibration", cal, "--sheet", "0.5mm", "--ease", "0.8"]);
+    assert!(!o.status.success());
+    let o = run(&[
+        "--calibration",
+        cal,
+        "--sheet",
+        "0.5mm",
+        "--panel-sheet",
+        "7=0.5mm",
+    ]);
+    assert!(String::from_utf8_lossy(&o.stderr).contains("panel 7 does not exist"));
+    std::fs::remove_dir_all(&out).unwrap();
+}
