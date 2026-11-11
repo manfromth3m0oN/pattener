@@ -8,6 +8,8 @@ repository.workspace = true
 
 [features]
 default = []
+# Embed the MakeHuman-based body model (about 2 MB) in the library.
+bundled-body = []
 serde = ["dep:serde", "glam/serde"]
 
 [dependencies]
