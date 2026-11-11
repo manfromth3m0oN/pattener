@@ -67,10 +67,23 @@ jobs:
           sleep 1
           node web/smoke-test.cjs http://localhost:8765/
 
+      # Everything the page loads: scripts, styles, the module and the
+      # example projects (not the build script or the smoke test).
       - name: Collect site
         run: |
           mkdir _site
-          cp web/index.html web/app.js web/worker.js web/style.css web/latexpat.wasm _site/
+          cp -r web/. _site/
+          rm _site/build.sh _site/smoke-test.cjs
+          test -f _site/viewer.js && test -f _site/examples/top.project.json
+
+      # On pull requests, the built site as a download to try locally.
+      - name: Upload preview
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v7
+        with:
+          name: site-preview
+          path: _site
+          retention-days: 14
 
       - name: Upload site
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'

@@ -79,7 +79,11 @@
           }
         ],
         "closed": true,
-        "mirror": false
+        "mirror": false,
+        "edge_finish": {
+          "kind": "hem",
+          "width_mm": 20.0
+        }
       },
       {
         "name": "neckline",
@@ -137,7 +141,12 @@
           }
         ],
         "closed": true,
-        "mirror": false
+        "mirror": false,
+        "edge_finish": {
+          "kind": "trim",
+          "width_mm": 15.0,
+          "ease": 0.9
+        }
       },
       {
         "name": "sleeve",
@@ -185,7 +194,10 @@
           }
         ],
         "closed": true,
-        "mirror": true
+        "mirror": true,
+        "edge_finish": {
+          "kind": "raw"
+        }
       },
       {
         "name": "side",
@@ -243,6 +255,25 @@
       "face": 20938,
       "u": 0.0,
       "v": 0.41720200335915364
+    },
+    "zones": [],
+    "default_sheet": null,
+    "sheet_assignments": []
+  },
+  "materials": [
+    {
+      "name": "black 0.40",
+      "color": "#151515",
+      "thickness_mm": 0.4,
+      "roll_width_mm": 1000.0,
+      "price_per_m": 28.0
+    },
+    {
+      "name": "red 0.40",
+      "color": "#b01020",
+      "thickness_mm": 0.4,
+      "roll_width_mm": 1000.0,
+      "price_per_m": 30.0
     }
-  }
+  ]
 }

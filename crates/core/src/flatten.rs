@@ -2,7 +2,7 @@
 
 use crate::arap::{arap, ArapOptions, EdgeTarget};
 use crate::cut::cut_panels;
-use crate::ease::Ease;
+use crate::ease::{reference_triangles, Ease};
 use crate::error::{Error, Result};
 use crate::lscm::lscm;
 use crate::mesh::Mesh;
@@ -24,6 +24,12 @@ pub struct FlattenOptions {
     pub up: DVec3,
     /// Equalise the two sides of every seam; `None` to skip.
     pub seam_matching: Option<SeamMatching>,
+    /// Fraction of the around-the-body reduction applied along the body
+    /// (see [`reference_triangles`]); 1 = the same in both directions.
+    pub length_relief: f64,
+    /// "Along the body" direction per input-mesh triangle (e.g. along the
+    /// bones). `None` uses `up`.
+    pub along: Option<Vec<DVec3>>,
     /// Relative membrane stiffness `k = μ t` of each panel (in
     /// [`cut_panels`] order), used to weight seam matching when panels are
     /// cut from different sheets. `None` means all equal.
@@ -38,6 +44,8 @@ impl Default for FlattenOptions {
             up: DVec3::Y,
             seam_matching: Some(SeamMatching::default()),
             panel_stiffness: None,
+            length_relief: 1.0,
+            along: None,
         }
     }
 }
@@ -118,16 +126,16 @@ pub struct FlatPanel {
     pub arap_iterations: usize,
 }
 
-/// Flatten one panel with per-local-triangle ease values, oriented so that
-/// `up` points up the page.
+/// Flatten one panel towards reference triangles `refs` (see
+/// [`reference_triangles`]), oriented so that `up` points up the page.
 pub fn flatten_panel(
     panel: Panel,
-    ease: &[f64],
+    refs: &[[DVec2; 3]],
     opts: &ArapOptions,
     up: DVec3,
 ) -> Result<FlatPanel> {
     let init = lscm(&panel)?;
-    let mut r = arap(&panel, ease, &init, opts, &[])?;
+    let mut r = arap(&panel, refs, &init, opts, &[])?;
     orient(&panel, &mut r.uv, up);
     let strain = measure(&panel, &r.uv);
     Ok(FlatPanel {
@@ -205,12 +213,12 @@ pub fn orient(panel: &Panel, uv: &mut [DVec2], up: DVec3) {
 /// Re-run ARAP on an already flattened panel with edge-length targets.
 pub fn refine_panel(
     fp: FlatPanel,
-    ease: &[f64],
+    refs: &[[DVec2; 3]],
     opts: &ArapOptions,
     up: DVec3,
     targets: &[EdgeTarget],
 ) -> Result<FlatPanel> {
-    let mut r = arap(&fp.panel, ease, &fp.uv, opts, targets)?;
+    let mut r = arap(&fp.panel, refs, &fp.uv, opts, targets)?;
     orient(&fp.panel, &mut r.uv, up);
     let strain = measure(&fp.panel, &r.uv);
     Ok(FlatPanel {
@@ -234,9 +242,35 @@ pub fn flatten_garment(mesh: &Mesh, seams: &SeamSet, opts: &FlattenOptions) -> R
             )));
         }
     }
+    if !(0.0..=1.0).contains(&opts.length_relief) {
+        return Err(Error::InvalidEase(format!(
+            "length relief must be between 0 and 1, got {}",
+            opts.length_relief
+        )));
+    }
+    if let Some(a) = &opts.along {
+        if a.len() != mesh.triangles().len() {
+            return Err(Error::InvalidEase(
+                "one 'along' direction is needed per mesh triangle".into(),
+            ));
+        }
+    }
     let eases = panels
         .iter()
-        .map(|p| opts.ease.for_panel(p))
+        .map(|p| {
+            let ease = opts.ease.for_panel(p)?;
+            let along: Vec<DVec3> = p
+                .face_origin
+                .iter()
+                .map(|&f| opts.along.as_ref().map_or(opts.up, |a| a[f as usize]))
+                .collect();
+            Ok(reference_triangles(
+                p,
+                &ease,
+                opts.length_relief,
+                Some(&along),
+            ))
+        })
         .collect::<Result<Vec<_>>>()?;
     let mut flat = panels
         .into_iter()
