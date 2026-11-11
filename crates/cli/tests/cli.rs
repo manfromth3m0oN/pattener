@@ -235,3 +235,45 @@ fn flatten_with_calibrated_sheets() {
     assert!(String::from_utf8_lossy(&o.stderr).contains("panel 7 does not exist"));
     std::fs::remove_dir_all(&out).unwrap();
 }
+
+#[test]
+fn body_from_measurements_then_flatten() {
+    let out = std::env::temp_dir().join(format!("latexpat-cli-test-body-{}", std::process::id()));
+    let o = Command::new(env!("CARGO_BIN_EXE_latexpat"))
+        .arg("body")
+        .arg(data("measurements.json"))
+        .args([
+            "--style",
+            "princess",
+            "--around",
+            "32",
+            "--ring-spacing",
+            "25",
+            "-o",
+        ])
+        .arg(&out)
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let seams = std::fs::read_to_string(out.join("body.seams.json")).unwrap();
+    assert!(seams.contains("princess_front_left") && seams.contains("\"notches\""));
+
+    let pat = out.join("pattern");
+    let o = Command::new(env!("CARGO_BIN_EXE_latexpat"))
+        .arg("flatten")
+        .arg(out.join("body.obj"))
+        .arg("--seams")
+        .arg(out.join("body.seams.json"))
+        .arg("-o")
+        .arg(&pat)
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    assert!(
+        o.stderr.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    assert!(pat.join("panel_05.svg").exists() && !pat.join("panel_06.svg").exists());
+    std::fs::remove_dir_all(&out).unwrap();
+}

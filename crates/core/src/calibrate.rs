@@ -272,6 +272,26 @@ impl CalibrationResult {
         self.sheets.iter().find(|s| s.name == name)
     }
 
+    /// Resolve a sheet name, or a thickness such as `"0.5mm"` (pooled
+    /// fit), to `(ease, stiffness μt, label)`.
+    pub fn resolve(&self, spec: &str) -> Result<(f64, f64, String)> {
+        if let Some(s) = self.sheet(spec) {
+            return Ok((s.ease, s.shear_modulus_mpa * s.thickness_mm, s.name.clone()));
+        }
+        let num = spec.trim().trim_end_matches("mm").trim();
+        if let Ok(t) = num.parse::<f64>() {
+            return Ok((
+                self.ease_for_thickness(t)?,
+                self.pooled_shear_modulus_mpa * t,
+                format!("{t} mm (pooled fit)"),
+            ));
+        }
+        let names: Vec<&str> = self.sheets.iter().map(|s| s.name.as_str()).collect();
+        Err(Error::Calibration(format!(
+            "unknown sheet '{spec}'; use one of {names:?} or a thickness such as 0.5mm"
+        )))
+    }
+
     /// Ease for an untested thickness of the same compound, using the
     /// pooled shear modulus.
     pub fn ease_for_thickness(&self, thickness_mm: f64) -> Result<f64> {

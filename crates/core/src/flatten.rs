@@ -58,6 +58,7 @@ impl Default for FlattenOptions {
 /// distort the panel more next to the seam.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(default))]
 pub struct SeamMatching {
     pub weight: f64,
     /// Maximum number of rounds.

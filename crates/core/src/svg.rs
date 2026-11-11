@@ -27,6 +27,7 @@ use std::fmt::Write;
 /// Which stretch measure colours the heatmap.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
 pub enum HeatmapMetric {
     /// Largest principal stretch `σ_max`.
     MaxStretch,
