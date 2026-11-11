@@ -24,7 +24,7 @@
 //! Latex should not be snipped (cuts start tears), so notches are drawn as
 //! pen marks.
 
-use crate::allowance::{is_simple, offset_polygon};
+use crate::allowance::{is_simple, offset_polygon, remove_loops};
 use crate::flatten::{FlatPanel, Garment};
 use crate::seam_match::body_edge_length;
 use crate::seams::{AllowanceSide, SeamId, SeamSet};
@@ -154,7 +154,8 @@ pub fn build_pattern(
                 .iter()
                 .map(|e| fp.uv[e.from as usize])
                 .collect();
-            let cut_outline = offset_polygon(&pts, &edge_allowance);
+            // Trim the loops an allowance makes at tight inward corners.
+            let cut_outline = remove_loops(offset_polygon(&pts, &edge_allowance));
             PatternPiece {
                 cut_outline_simple: is_simple(&cut_outline),
                 edge_allowance,
