@@ -241,7 +241,9 @@ mod tests {
     #[test]
     fn svg_is_mm_sized_and_contains_outline() {
         let m = testmesh::grid(4, 2, 25.0);
-        let fp = &flatten_garment(&m, &SeamSet::default(), &FlattenOptions::default()).unwrap()[0];
+        let fp = &flatten_garment(&m, &SeamSet::default(), &FlattenOptions::default())
+            .unwrap()
+            .panels[0];
         let svg = panel_svg(
             fp,
             &SvgOptions {
