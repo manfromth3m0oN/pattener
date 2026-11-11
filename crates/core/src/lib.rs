@@ -18,6 +18,8 @@
 
 pub mod cut;
 pub mod error;
+pub mod linalg;
+pub mod lscm;
 pub mod mesh;
 pub mod obj;
 pub mod panel;
