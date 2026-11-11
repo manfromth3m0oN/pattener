@@ -495,17 +495,18 @@ fn write_job(dir: &Path, mesh: &str, scale: f64, out: &JobOutput) -> Result<()> 
     fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
     let r = &out.report;
     println!(
-        "{:<10} {:>6} {:>6} {:>9} {:>9} {:>9} {:>17}  seams",
-        "panel", "tris", "ease", "min σ", "max σ", "area ×", "size (mm)"
+        "{:<10} {:>6} {:>6} {:>9} {:>9} {:>9} {:>9} {:>17}  seams",
+        "panel", "tris", "ease", "min σ", "p95 σ", "max σ", "area ×", "size (mm)"
     );
     for (p, svg) in r.panels.iter().zip(&out.panel_svgs) {
         write(&dir.join(&p.file), svg)?;
         println!(
-            "{:<10} {:>6} {:>6.3} {:>9.4} {:>9.4} {:>9.4} {:>8.1} × {:<6.1}  {}",
+            "{:<10} {:>6} {:>6.3} {:>9.4} {:>9.4} {:>9.4} {:>9.4} {:>8.1} × {:<6.1}  {}",
             p.index,
             p.triangles,
             p.ease,
             p.min_stretch,
+            p.p95_stretch,
             p.max_stretch,
             p.mean_area_stretch,
             p.flat_width_mm,

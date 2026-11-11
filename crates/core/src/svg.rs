@@ -157,10 +157,11 @@ pub fn panel_svg(fp: &FlatPanel, piece: &PatternPiece, opts: &SvgOptions) -> Str
     let r = &fp.strain;
     let _ = writeln!(
         s,
-        r#"<text x="{:.3}" y="{ty:.3}">stretch {:.3}–{:.3}, mean area ×{:.3}{}</text>"#,
+        r#"<text x="{:.3}" y="{ty:.3}">stretch {:.3}–{:.3} (95 % under {:.3}), mean area ×{:.3}{}</text>"#,
         lo.x - m + 2.0,
         r.min_stretch,
         r.max_stretch,
+        r.p95_stretch,
         r.mean_area_stretch,
         if r.flipped.is_empty() {
             String::new()

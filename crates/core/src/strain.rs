@@ -44,6 +44,12 @@ pub struct StrainReport {
     pub min_stretch: f64,
     /// Largest `σ_max` over the panel.
     pub max_stretch: f64,
+    /// Area-weighted 95th percentile of `σ_max`: 95 % of the piece (by
+    /// body area) stretches less than this. Unlike [`max_stretch`], it is
+    /// not dominated by a few tiny triangles at sharp seam corners.
+    ///
+    /// [`max_stretch`]: StrainReport::max_stretch
+    pub p95_stretch: f64,
     /// Body-area-weighted mean of the area stretch `σ_min σ_max`.
     pub mean_area_stretch: f64,
     /// 3D surface area (mm²).
@@ -82,6 +88,7 @@ pub fn measure(panel: &Panel, uv: &[DVec2]) -> StrainReport {
     let mut flipped = Vec::new();
     let (mut min_s, mut max_s) = (f64::INFINITY, 0.0f64);
     let (mut body_area, mut flat_area, mut weighted) = (0.0, 0.0, 0.0);
+    let mut areas = Vec::with_capacity(panel.triangles.len());
     for (t, tri) in panel.triangles.iter().enumerate() {
         let p = tri.map(|i| panel.positions[i as usize]);
         let u = tri.map(|i| uv[i as usize]);
@@ -96,23 +103,53 @@ pub fn measure(panel: &Panel, uv: &[DVec2]) -> StrainReport {
         body_area += ba;
         flat_area += fa;
         weighted += ba * s.area();
+        areas.push(ba);
         triangles.push(s);
     }
+    let p95_stretch = area_percentile(&triangles, &areas, 0.95);
     StrainReport {
         triangles,
         flipped,
         min_stretch: min_s,
         max_stretch: max_s,
+        p95_stretch,
         mean_area_stretch: weighted / body_area,
         body_area,
         flat_area,
     }
 }
 
+/// The value of `σ_max` below which a fraction `q` of the total area lies:
+/// sort triangles by `σ_max` and accumulate their areas until `q` of the
+/// total is reached.
+fn area_percentile(stretch: &[PrincipalStretch], areas: &[f64], q: f64) -> f64 {
+    let mut idx: Vec<usize> = (0..stretch.len()).collect();
+    idx.sort_by(|&a, &b| stretch[a].max.total_cmp(&stretch[b].max));
+    let total: f64 = areas.iter().sum();
+    let mut acc = 0.0;
+    for &i in &idx {
+        acc += areas[i];
+        if acc >= q * total {
+            return stretch[i].max;
+        }
+    }
+    idx.last().map_or(f64::NAN, |&i| stretch[i].max)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use approx::assert_relative_eq;
+
+    #[test]
+    fn percentile_ignores_tiny_outliers() {
+        let s = |m: f64| PrincipalStretch { min: m, max: m };
+        // 99 % of the area at 1.2, a sliver at 5.
+        let stretch = [s(1.2), s(1.2), s(5.0)];
+        let areas = [50.0, 49.0, 1.0];
+        assert_relative_eq!(area_percentile(&stretch, &areas, 0.95), 1.2);
+        assert_relative_eq!(area_percentile(&stretch, &areas, 1.0), 5.0);
+    }
 
     #[test]
     fn known_stretch() {

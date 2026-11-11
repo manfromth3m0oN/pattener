@@ -479,8 +479,8 @@ function show(output, extraFiles) {
   if (output.layout_svg) dl.appendChild(fileLink('layout.svg', output.layout_svg, 'image/svg+xml'));
   dl.appendChild(fileLink('report.json', JSON.stringify(r, null, 2), 'application/json'));
 
-  table($('panel-table'), ['panel', 'ease', 'min σ', 'max σ', 'cut size (mm)', 'seams'],
-    r.panels.map((p) => [p.index, f(p.ease, 3), f(p.min_stretch, 3), f(p.max_stretch, 3),
+  table($('panel-table'), ['panel', 'ease', 'min σ', '95 % under', 'max σ', 'cut size (mm)', 'seams'],
+    r.panels.map((p) => [p.index, f(p.ease, 3), f(p.min_stretch, 3), f(p.p95_stretch, 3), f(p.max_stretch, 3),
       `${f(p.cut_width_mm)} × ${f(p.cut_height_mm)}`, p.seams.join(', ')]));
   table($('seam-table'), ['seam', 'panels', 'body (mm)', 'flat (mm)', 'mismatch (mm)', 'before matching'],
     r.seams.map((s) => [s.seam, `${s.left_panel}↔${s.right_panel}`, f(s.body_length_mm),
