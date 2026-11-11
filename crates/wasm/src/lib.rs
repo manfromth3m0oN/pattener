@@ -27,10 +27,11 @@
 use latexpat_core::body::{torso, BodyMeasurements, BodyOptions};
 use latexpat_core::calibrate::{calibrate, Calibration};
 use latexpat_core::cut::cut_panels;
-use latexpat_core::garment::{build, zones_on, GarmentDesign};
+use latexpat_core::garment::{build, material_plan, panel_faces, zones_on, GarmentDesign};
 use latexpat_core::glam::DVec3;
 use latexpat_core::human::{along_body, fit, BodyModel, HumanBody, Measurer};
 use latexpat_core::job::{self, JobOptions};
+use latexpat_core::materials::Sheet;
 use latexpat_core::obj::{parse_obj, write_obj};
 use latexpat_core::project::BodySpec;
 use latexpat_core::SeamSet;
@@ -72,6 +73,9 @@ enum Request {
         /// Also make the pattern (otherwise just the preview).
         #[serde(default)]
         pattern: bool,
+        /// The project's latex sheets.
+        #[serde(default)]
+        materials: Vec<Sheet>,
         #[serde(default)]
         options: JobOptions,
     },
@@ -187,6 +191,7 @@ fn run(request: &str) -> Result<Value, String> {
             body,
             design,
             pattern,
+            materials,
             options,
         } => {
             let b = fitted(&body)?;
@@ -216,6 +221,30 @@ fn run(request: &str) -> Result<Value, String> {
                     .map_err(|e| e.to_string())
             });
             let zones = zones_on(&b.mesh, &design).map_err(|e| e.to_string())?;
+            // Each piece with its sheet, for the colour preview.
+            let (plan, mut plan_warnings) =
+                material_plan(&b.mesh, &g, &design, &materials).map_err(|e| e.to_string())?;
+            let mut pieces = Vec::new();
+            if let (Some(gm), true) = (&g.mesh, panels.as_ref().is_some_and(|p| p.is_ok())) {
+                for (pi, faces) in panel_faces(&g)
+                    .map_err(|e| e.to_string())?
+                    .iter()
+                    .enumerate()
+                {
+                    let tris: Vec<u32> = faces
+                        .iter()
+                        .flat_map(|&f| {
+                            gm.triangles()[f as usize].map(|v| g.vertex_origin[v as usize])
+                        })
+                        .collect();
+                    let sheet = plan.as_ref().map(|p| &p.sheets[p.panel_sheet[pi]]);
+                    pieces.push(json!({
+                        "triangles": tris,
+                        "sheet": sheet.map(|s| s.name.clone()),
+                        "color": sheet.map(|s| s.color.clone()),
+                    }));
+                }
+            }
             let output = match (&g.mesh, pattern) {
                 (Some(m), true) => {
                     let mut options = options;
@@ -229,6 +258,7 @@ fn run(request: &str) -> Result<Value, String> {
                     options.along =
                         Some(along_body(&b.joints, &centres).map_err(|e| e.to_string())?);
                     options.ease_zones = zones.clone();
+                    options.materials = plan.clone();
                     Some(job::run(m, &g.seams, &options).map_err(|e| e.to_string())?)
                 }
                 (None, true) => {
@@ -248,16 +278,19 @@ fn run(request: &str) -> Result<Value, String> {
                 .iter()
                 .map(|z| json!({ "center": [z.center.x, z.center.y, z.center.z], "radius_mm": z.radius_mm, "ease": z.ease }))
                 .collect();
+            let mut warnings = g.warnings.clone();
+            warnings.append(&mut plan_warnings);
             Ok(json!({
                 "ok": true,
                 "positions": flat3(g.body.positions().iter().copied()),
                 "triangles": g.body.triangles().iter().flatten().copied().collect::<Vec<u32>>(),
                 "garment_triangles": garment_triangles,
                 "curves": curves,
-                "warnings": g.warnings,
+                "warnings": warnings,
                 "panels": panels.as_ref().and_then(|p| p.as_ref().ok()),
                 "panel_error": panels.as_ref().and_then(|p| p.as_ref().err()),
                 "zones": zone_json,
+                "pieces": pieces,
                 "pressure": pressure,
                 "output": output,
             }))
@@ -376,8 +409,9 @@ mod tests {
         )
         .unwrap();
         let req = |pattern: bool| {
-            json!({ "command": "garment", "body": project["body"], "design": project["garment"], "pattern": pattern })
-                .to_string()
+            json!({ "command": "garment", "body": project["body"], "design": project["garment"],
+                    "materials": project["materials"], "pattern": pattern })
+            .to_string()
         };
         let preview = parse(&handle(&req(false)));
         assert_eq!(preview["ok"], true, "{}", preview["error"]);
@@ -385,6 +419,12 @@ mod tests {
         assert!(preview["panel_error"].is_null());
         assert_eq!(preview["curves"].as_array().unwrap().len(), 8);
         assert!(preview["output"].is_null());
+        // Two pieces, both on the first sheet of the catalogue.
+        let pieces = preview["pieces"].as_array().unwrap();
+        assert_eq!(pieces.len(), 2);
+        assert!(pieces
+            .iter()
+            .all(|p| p["sheet"] == "black 0.40" && p["color"] == "#151515"));
         let n = preview["garment_triangles"].as_array().unwrap().len();
         assert!(n > 0 && n.is_multiple_of(3));
         let full = parse(&handle(&req(true)));

@@ -59,6 +59,11 @@
             <button type="button" id="g-undo">Undo point</button>
             <button type="button" id="g-delete">Delete curve</button>
             <button type="button" id="g-zone">Add ease zone</button>
+            <span class="toolbar-group">
+              <button type="button" id="g-paint">Paint sheet</button>
+              <select id="g-paint-sheet" aria-label="Sheet to paint"></select>
+              <button type="button" id="g-paint-clear" title="Every piece back to the default sheet">Unpaint all</button>
+            </span>
             <button type="button" id="g-example">Load example top</button>
             <button type="button" id="g-clear">Clear</button>
           </div>
@@ -117,8 +122,19 @@
     </div>
   </section>
 
-<section>
-    <h2>2. Latex and pattern</h2>
+  <section>
+    <h2>2. Latex sheets</h2>
+    <p class="hint">The sheets you'll cut from. Each piece uses the default sheet unless you paint it another one on the body
+      (Paint sheet, under the garment tools). Leave Ease empty to use the ease below or the swatch calibration.</p>
+    <table id="sheets"></table>
+    <div class="toolbar">
+      <button type="button" id="sheet-add">Add sheet</button>
+      <label>Default sheet <select id="sheet-default"></select></label>
+    </div>
+  </section>
+
+  <section>
+    <h2>3. Pattern</h2>
     <div class="grid">
       <label>Ease <input type="number" id="ease" value="0.85" step="0.01" min="0.5" max="1"></label>
       <label>Glue allowance (mm) <input type="number" id="allowance" value="6" step="1" min="0"></label>
@@ -152,13 +168,14 @@
   </section>
 
   <section id="results" hidden>
-    <h2>3. Pattern</h2>
+    <h2>4. Your pattern</h2>
     <ul id="warnings"></ul>
     <div id="downloads"></div>
     <h3>Panels</h3>
     <table id="panel-table"></table>
     <h3>Seams</h3>
     <table id="seam-table"></table>
+    <div id="materials-out"></div>
     <div id="layout"></div>
     <div id="pieces" class="pieces"></div>
     <p class="hint">Print SVGs at 100 % and check the 50 mm scale bar. Mark notches with a pen; snipping latex starts tears.</p>

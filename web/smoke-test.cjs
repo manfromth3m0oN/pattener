@@ -80,10 +80,30 @@ const done = (p) => p.waitForFunction(
   assert.equal(moved.n, t.n);
   assert.equal(moved.yaw, t.yaw);
   await garmentReady();
+  // Paint the back with the example's second sheet (turn the view to the
+  // back first): one piece turns red.
+  await page.evaluate(() => { viewer.yaw += Math.PI; viewer.draw(); });
+  await page.selectOption('#g-paint-sheet', 'red 0.40');
+  await page.click('#g-paint');
+  await page.locator('#viewer').scrollIntoViewIfNeeded();
+  const vbox = await page.locator('#viewer').boundingBox();
+  await page.mouse.click(vbox.x + vbox.width * 0.5, vbox.y + vbox.height * 0.45);
+  await page.waitForFunction(() => design.sheet_assignments.length === 1, null, { timeout: 10000 });
+  // The preview refreshes asynchronously: wait for exactly one red piece.
+  await page.waitForFunction(
+    () => viewer.overlay && viewer.overlay.pieces
+      && viewer.overlay.pieces.filter((p) => p.color[0] > 0.5).length === 1
+      && viewer.overlay.pieces.length === 2,
+    null, { timeout: 60000 });
+  await page.click('#g-paint');
+  await page.evaluate(() => { viewer.yaw -= Math.PI; viewer.draw(); });
+
   // An ease zone by clicking the body, then the pattern with lengthwise
   // relief: the pressure map appears and the table has pressure columns.
   await page.click('#g-zone');
-  await page.mouse.click(box.x + box.width * 0.5, box.y + box.height * 0.42);
+  await page.locator('#viewer').scrollIntoViewIfNeeded();
+  const zbox = await page.locator('#viewer').boundingBox();
+  await page.mouse.click(zbox.x + zbox.width * 0.5, zbox.y + zbox.height * 0.42);
   await page.waitForFunction(() => document.querySelectorAll('#g-zones tr').length === 2, null, { timeout: 30000 });
   await garmentReady();
   await page.fill('#length-relief', '40');
@@ -94,6 +114,9 @@ const done = (p) => p.waitForFunction(
   assert.match(await page.textContent('#status'), /Done .*2 panels/);
   assert.ok(await page.isVisible('#pressure-panel'));
   assert.match(await page.locator('#panel-table').innerText(), /mmHg/);
+  // One layout per sheet, with a materials list.
+  assert.equal(await page.locator('#materials-out img').count(), 2);
+  assert.match(await page.locator('#materials-out table').innerText(), /red 0\.40/);
   await page.fill('#length-relief', '100');
   await page.evaluate(() => localStorage.clear());
 

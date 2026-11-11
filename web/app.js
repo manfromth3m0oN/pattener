@@ -163,7 +163,10 @@ async function fitBody() {
 $('fit-body').onclick = fitBody;
 
 // ---- garment drawn on the body ------------------------------------------------
-let design = { curves: [], inside: null, zones: [] };
+let design = { curves: [], inside: null, zones: [], sheet_assignments: [] };
+const DEFAULT_SHEETS = () => [{ name: 'black 0.40', color: '#151515', thickness_mm: 0.4, roll_width_mm: 1000 }];
+let materials = DEFAULT_SHEETS();
+const hexToRgb = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 255);
 let active = -1;          // selected curve index
 let picking = null;       // 'add' | 'inside' | null
 const EDGE_COLOR = [0.95, 0.75, 0.05], SEAM_COLOR = [0.15, 0.6, 1.0], ACTIVE_COLOR = [1, 1, 1];
@@ -180,6 +183,7 @@ function setPicking(mode) {
   picking = mode;
   $('g-inside').classList.toggle('active', mode === 'inside');
   $('g-zone').classList.toggle('active', mode === 'zone');
+  $('g-paint').classList.toggle('active', mode === 'paint');
   if (viewer) $('viewer').classList.toggle('picking', !!mode);
 }
 
@@ -243,9 +247,12 @@ async function refreshGarment() {
         $('g-warnings').replaceChildren();
         continue;
       }
-      const r = await call({ command: 'garment', body: readBody(), design });
+      const r = await call({ command: 'garment', body: readBody(), design, materials });
       if (!r.ok) throw new Error(r.error);
-      viewer?.setMesh(new Float32Array(r.positions), new Uint32Array(r.triangles), new Uint32Array(r.garment_triangles));
+      const pieces = (r.pieces || []).filter((p) => p.color).map((p) => ({
+        triangles: new Uint32Array(p.triangles), color: hexToRgb(p.color),
+      }));
+      viewer?.setMesh(new Float32Array(r.positions), new Uint32Array(r.triangles), new Uint32Array(r.garment_triangles), null, pieces);
       viewer?.setLines([
         ...r.curves.map((c) => ({
           points: new Float32Array(c.points),
@@ -289,6 +296,8 @@ if (viewer) {
     if (picking === 'inside') {
       design.inside = sp;
       setPicking(design.curves[active] ? 'add' : null);
+    } else if (picking === 'paint') {
+      design.sheet_assignments.push({ point: sp, sheet: $('g-paint-sheet').value });
     } else if (picking === 'zone') {
       const base = num('ease') || 0.85;
       design.zones.push({
@@ -353,6 +362,63 @@ if (viewer) {
 $('g-new-edge').onclick = () => newCurve('edge');
 $('g-new-seam').onclick = () => newCurve('seam');
 $('g-inside').onclick = () => setPicking(picking === 'inside' ? 'add' : 'inside');
+$('g-paint').onclick = () => setPicking(picking === 'paint' ? (design.curves[active] ? 'add' : null) : 'paint');
+$('g-paint-clear').onclick = () => { design.sheet_assignments = []; changed(); };
+
+// ---- latex sheets ---------------------------------------------------------------
+function renderSheets() {
+  const t = $('sheets');
+  table(t, ['name', 'colour', 'thickness (mm)', 'roll width (mm)', 'ease', 'price / m', ''], []);
+  materials.forEach((m, i) => {
+    const row = t.insertRow();
+    const input = (key, type, attrs = {}, optional = false) => {
+      const el = Object.assign(document.createElement('input'), { type, ...attrs });
+      el.value = m[key] ?? '';
+      el.onchange = () => {
+        const v = el.value.trim();
+        if (type === 'number') {
+          if (optional && v === '') delete m[key]; else m[key] = Number(v);
+        } else {
+          const old = m.name;
+          m[key] = v;
+          // Renaming a sheet keeps its assignments.
+          if (key === 'name') {
+            design.sheet_assignments.forEach((a) => { if (a.sheet === old) a.sheet = v; });
+            if (design.default_sheet === old) design.default_sheet = v;
+          }
+        }
+        renderSheets();
+        changed();
+      };
+      row.insertCell().appendChild(el);
+    };
+    input('name', 'text');
+    input('color', 'color');
+    input('thickness_mm', 'number', { min: 0.05, step: 0.05 });
+    input('roll_width_mm', 'number', { min: 100, step: 50 });
+    input('ease', 'number', { min: 0.5, max: 1.2, step: 0.01, placeholder: 'auto' }, true);
+    input('price_per_m', 'number', { min: 0, step: 0.5, placeholder: '–' }, true);
+    const del = Object.assign(document.createElement('button'), { type: 'button', textContent: '✕', title: 'Remove sheet' });
+    del.disabled = materials.length === 1;
+    del.onclick = () => { materials.splice(i, 1); renderSheets(); changed(); };
+    row.insertCell().appendChild(del);
+  });
+  for (const id of ['sheet-default', 'g-paint-sheet']) {
+    const sel = $(id), keep = sel.value;
+    sel.replaceChildren(...materials.map((m) => Object.assign(document.createElement('option'), { value: m.name, textContent: m.name })));
+    if (materials.some((m) => m.name === keep)) sel.value = keep;
+  }
+  if (design.default_sheet && materials.some((m) => m.name === design.default_sheet)) $('sheet-default').value = design.default_sheet;
+}
+$('sheet-add').onclick = () => {
+  const colours = ['#b01020', '#1d3fa0', '#1a7a3a', '#6a2a8a', '#c0c0c8'];
+  materials.push({ name: `sheet ${materials.length + 1}`, color: colours[(materials.length - 1) % colours.length], thickness_mm: 0.4, roll_width_mm: 1000 });
+  renderSheets();
+  changed();
+};
+$('sheet-default').onchange = () => { design.default_sheet = $('sheet-default').value; changed(); };
+renderSheets();
+
 $('g-zone').onclick = () => setPicking(picking === 'zone' ? (design.curves[active] ? 'add' : null) : 'zone');
 
 function renderZones() {
@@ -429,7 +495,7 @@ $('g-delete').onclick = () => {
 };
 $('g-clear').onclick = () => {
   if (design.curves.length && !confirm('Remove the whole garment drawing?')) return;
-  design = { curves: [], inside: null, zones: [] };
+  design = { curves: [], inside: null, zones: [], sheet_assignments: [] };
   active = -1;
   setPicking(null);
   changed();
@@ -439,6 +505,8 @@ $('g-example').onclick = async () => {
   const p = await (await fetch('examples/top.project.json')).json();
   design = p.garment;
   design.zones = design.zones || [];
+  design.sheet_assignments = design.sheet_assignments || [];
+  if (p.materials && p.materials.length) { materials = p.materials; renderSheets(); }
   active = -1;
   setPicking(null);
   changed();
@@ -454,7 +522,7 @@ const EXAMPLE_BODY = {
   shape: {},
 };
 function readProject() {
-  return { version: 1, name: $('project-name').value.trim() || 'Untitled', body: readBody(), garment: design, units };
+  return { version: 1, name: $('project-name').value.trim() || 'Untitled', body: readBody(), garment: design, materials, units };
 }
 function writeProject(p) {
   $('project-name').value = p.name || 'Untitled';
@@ -463,6 +531,9 @@ function writeProject(p) {
   writeBody(p.body || {});
   design = p.garment && Array.isArray(p.garment.curves) ? p.garment : { curves: [], inside: null };
   design.zones = design.zones || [];
+  design.sheet_assignments = design.sheet_assignments || [];
+  materials = Array.isArray(p.materials) && p.materials.length ? p.materials : DEFAULT_SHEETS();
+  renderSheets();
   active = -1;
   setPicking(null);
 }
@@ -496,7 +567,7 @@ $('project-open').onchange = async () => {
 };
 $('project-new').onclick = () => {
   if (!confirm('Start a new project? Unsaved changes to this one will be lost.')) return;
-  writeProject({ name: 'Untitled', body: { measurements: {}, shape: {} }, garment: { curves: [], inside: null, zones: [] }, units });
+  writeProject({ name: 'Untitled', body: { measurements: {}, shape: {} }, garment: { curves: [], inside: null, zones: [], sheet_assignments: [] }, materials: DEFAULT_SHEETS(), units });
   saveLocal();
   fitBody();
 };
@@ -614,6 +685,29 @@ function show(output, extraFiles) {
     r.seams.map((s) => [s.seam, `${s.left_panel}↔${s.right_panel}`, f(s.body_length_mm),
       f(s.left_length_mm), f(s.mismatch_mm, 2), f(s.mismatch_before_matching_mm, 2)]));
 
+  const mout = $('materials-out');
+  mout.replaceChildren();
+  if (r.materials && r.materials.length) {
+    const h = document.createElement('h3');
+    h.textContent = 'Materials';
+    const t = document.createElement('table');
+    mout.append(h, t);
+    table(t, ['sheet', 'pieces', 'roll (mm)', 'length to buy', 'piece area', 'used', 'cost'],
+      r.materials.map((u) => [u.sheet, u.pieces.join(', '), f(u.roll_width_mm, 0), `${f(u.length_mm / 1000, 2)} m`,
+        `${f(u.pieces_area_m2, 3)} m²`, `${f(100 * u.utilisation, 0)} %`, u.cost == null ? '–' : f(u.cost, 2)]));
+    [...t.rows].slice(1).forEach((row, i) => {
+      const sw = Object.assign(document.createElement('span'), { className: 'swatch' });
+      sw.style.background = r.materials[i].color;
+      row.cells[0].prepend(sw);
+    });
+    r.materials.forEach((u, i) => {
+      const h4 = document.createElement('h4');
+      h4.textContent = `${u.sheet}: ${f(u.length_mm / 1000, 2)} m of a ${f(u.roll_width_mm, 0)} mm roll`;
+      mout.append(h4, svgImage(output.material_layouts[i], `layout on ${u.sheet}`));
+      dl.appendChild(fileLink(u.file, output.material_layouts[i], 'image/svg+xml'));
+    });
+  }
+
   const layout = $('layout');
   layout.replaceChildren();
   if (output.layout_svg) {
@@ -683,7 +777,7 @@ async function run() {
     };
     const t0 = performance.now();
     const res = source() === 'human'
-      ? await call({ command: 'garment', body: readBody(), design, pattern: true, options })
+      ? await call({ command: 'garment', body: readBody(), design, materials, pattern: true, options })
       : await call({ command: 'pattern', obj, seams, scale, options });
     if (!res.ok) throw new Error(res.error);
     show(res.output, extra);

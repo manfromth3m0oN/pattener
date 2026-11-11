@@ -78,6 +78,22 @@ Below the 3D view, draw the garment on the body:
   Pressure uses the calibrated sheets, or `--thickness` (default 0.40 mm)
   with μ = 0.45 MPa.
 
+### Latex sheets and colour
+
+A project has a catalogue of sheets: name, colour, thickness, roll width,
+and optionally its own ease, rubber stiffness and price per metre. Every
+piece uses the default sheet unless you **paint** it another one on the
+body (the piece containing the point you click; points rather than piece
+numbers, so the choice survives changes to the seams). The 3D preview
+shows each piece in its sheet's colour.
+
+Each piece then takes its sheet's ease (the sheet's own, else its swatch
+calibration by name or thickness, else the global ease) and stiffness
+(for seam matching and the pressure map), and each sheet's pieces are
+laid out on its roll width (`layout_<sheet>.svg`). The materials list
+gives the length of each roll to buy, the area of the pieces, how much of
+the roll is used, and the cost.
+
 Each piece's report gives its stretch range and the stretch that 95 % of
 its area stays under, which is not thrown off by a few tiny triangles at
 sharp seam corners the way the maximum is.
@@ -299,6 +315,5 @@ flatten to sides 3.1 mm apart; matching removes the gap edge by edge
 
 Next, towards designing whole garments: full body from measurements with a
 3D view and project files (done); garments drawn on the body (done); fit
-tools (done); materials and colour (sheet
-catalogue, per-panel colour, preview, quantities); construction details
+tools (done); materials and colour (done); construction details
 and print output (zips, trims, tiled PDF, assembly guide); templates.
