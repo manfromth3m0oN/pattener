@@ -21,3 +21,8 @@ approx = "0.5"
 
 [profile.release]
 lto = true
+
+# The body fit and the flattening tests are numeric; unoptimised they take
+# tens of seconds.
+[profile.test]
+opt-level = 2

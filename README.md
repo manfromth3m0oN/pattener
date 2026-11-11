@@ -25,7 +25,140 @@ Enter measurements (or upload an OBJ and seams), set the ease and pattern
 options, and download the pieces. `node web/smoke-test.cjs <url>` checks the
 page with Playwright.
 
-## Body from measurements
+## Full body from measurements
+
+The web app opens on a full body fitted to your tape measurements (any of
+15: height, inseam, waist height, arm length and 11 girths), shown in 3D
+with the tape positions on it. Body type, muscle, cup, belly and buttocks
+are set by eye. Projects (name, measurements, shape, units) save to a
+`.latexpat.json` file and autosave in the browser.
+
+```sh
+latexpat human tests/data/project.json -o body/   # body.obj + measurements.json
+```
+
+The body is the [MakeHuman](https://github.com/makehumancommunity/makehuman)
+base mesh (CC0, see `assets/body/README.md`) morphed by its shape targets.
+`human::fit` solves height, weight and 17 local shape parameters so the
+body's own tape measurements (convex-hull girths of plane cuts at the
+narrowest or fullest point, as with a real tape) match yours, typically to
+well under a millimetre. Combinations the model cannot reach are reported
+with how far off they are.
+
+### Drawing the garment
+
+Below the 3D view, draw the garment on the body:
+
+- **Edges** (necklines, hems, cuffs, leg openings): click points around the
+  body; close the loop.
+- **Seams** split the garment into pieces that lie flat. Their ends snap
+  onto an edge or another seam within 2 cm.
+- Curves pass smoothly through the points you click; drag a point of the
+  selected curve to move it. Tick **Mirror** to get the same curve on the
+  other side.
+- **Pick inside** chooses which side of the edges is the garment.
+
+### Fit tools
+
+- **Lengthwise reduction** (`--length-relief`, or "% of around" in the web
+  app): latex is usually reduced less along the body than around it.
+  The reference shapes are scaled by `s` around and `1 − r(1 − s)` along
+  the body; "along" follows the skeleton on the full body (bone
+  directions blended as orientation tensors) and the up axis otherwise.
+- **Ease zones**: click a point on the body and give it its own ease
+  within a radius (looser at the crotch or a cuff, firmer at the waist),
+  blending back to the rest; zones can be mirrored and follow the body.
+- **Pressure map**: after Make pattern the garment on the body is coloured
+  by how hard it presses, `p = T₁κ₁ + T₂κ₂` (neo-Hookean tensions in the
+  principal stretch directions times the body's curvature in those
+  directions, at a latex-scale of a few centimetres), in mmHg. Blue marks
+  where it **bridges** a hollow instead of touching the skin. Each piece
+  reports its mean and 95th-percentile pressure, bridging and slack
+  (wrinkle-prone) area; pieces where 5 % exceeds 40 mmHg are flagged.
+  Pressure uses the calibrated sheets, or `--thickness` (default 0.40 mm)
+  with μ = 0.45 MPa.
+
+### Latex sheets and colour
+
+A project has a catalogue of sheets: name, colour, thickness, roll width,
+and optionally its own ease, rubber stiffness and price per metre. Every
+piece uses the default sheet unless you **paint** it another one on the
+body (the piece containing the point you click; points rather than piece
+numbers, so the choice survives changes to the seams). The 3D preview
+shows each piece in its sheet's colour.
+
+Each piece then takes its sheet's ease (the sheet's own, else its swatch
+calibration by name or thickness, else the global ease) and stiffness
+(for seam matching and the pressure map), and each sheet's pieces are
+laid out on its roll width (`layout_<sheet>.svg`). The materials list
+gives the length of each roll to buy, the area of the pieces, how much of
+the roll is used, and the cost.
+
+### Templates
+
+**Start from template** replaces the garment with one of these starting
+designs, built from the body's tape loops so they follow your measurements:
+
+| Template | Pieces | Construction |
+|---|---|---|
+| Short-sleeved top | front, back | shoulder and side seams; trimmed neckline, folded hem |
+| Leggings | one per leg | centre front and back, inside leg; folded waist |
+| Catsuit | left and right front and back | back zip from neck to crotch, seams over and under the arms, down the sides and inside legs; trimmed neckline |
+| Waist cincher | left and right front and back | back zip, side seams; trimmed top and bottom |
+
+Every curve stays editable: move points, add seams, change finishes.
+`cargo run -p latexpat-core --features serde,bundled-body --example
+gen_garment_examples` regenerates `web/examples/` from
+`garment::examples::TEMPLATES`.
+
+### Construction and printing
+
+Select a curve to choose how it is made. A **seam** is glued (a lap seam:
+one piece's allowance under the other's edge) or a **zip** (each side gets
+a strip, `--zip-allowance`, default 10 mm, to glue the zip tape under). An
+**edge** is left to the pattern's hem allowance, cut **raw** on the line
+(latex does not fray), given a **folded hem** of its own width, or bound
+with a **trim strip**: a separate strip of the given width, cut shorter
+than the edge (90 % by default) so it hugs the body. Trim strips are
+listed with their sizes, drawn as `trim_NN.svg` with quarter marks to
+spread the stretch evenly, and laid out with the pieces.
+
+The **assembly guide** orders the work: cut and mark notches, join the
+pieces into one (shortest seams first), close the remaining seams, then fit
+zips, hem, and bind edges. Each step names the pieces, which one carries
+the lap, and the notches to match.
+
+**Printable PDF** (`--pdf a4` or `--pdf letter`, or the selector in the
+web app) puts every piece at full size over home-printer pages that
+overlap by 10 mm, with corner marks, a row/column label on each page, a
+50 mm check square, the materials list and the assembly guide. Print at
+100 %, check the square, trim and tape the pages together.
+
+Each piece's report gives its stretch range and the stretch that 95 % of
+its area stays under, which is not thrown off by a few tiny triangles at
+sharp seam corners the way the maximum is.
+
+The preview shows the garment in latex colour and says how many flat
+pieces the seams make, or which piece still wraps around and needs a seam.
+**Start from template** gives a top, leggings, a catsuit or a waist cincher
+to start from (see Templates below). Designs are
+stored as positions on the body model's triangles, which are the same for
+every body, so a design follows the body when the measurements change.
+
+```sh
+latexpat flatten --project tests/data/top.project.json -o pattern/ --heatmap max
+```
+
+Under the hood (`garment::build`): curves become Catmull–Rom splines
+sampled every 15 mm on the skin, are cut exactly into the mesh by walking
+the plane section between samples (with a shortest-path fallback where the
+plane cannot join two points, as at the armpit), the mesh is cleaned of
+tiny edges and slivers, and the garment area is flood-filled from the
+inside point without crossing edges. Seam matching never folds a panel to
+make seams equal: a seam that needs shaping keeps its difference and is
+reported (the example top, with no bust shaping, warns about this).
+
+## Quick torso from measurements
 
 ```sh
 latexpat body measurements.json -o body/ --style princess
@@ -73,6 +206,8 @@ cargo run --release -p latexpat -- flatten body.obj --seams seams.json --ease 0.
 | `--sheet-width MM` | lay all pieces out on a sheet this wide and write `layout.svg` |
 | `--sheet-gap MM` | gap between pieces on the sheet (default 5) |
 | `--no-rotate` | keep pieces upright on the sheet |
+| `--zip-allowance MM` | strip on each side of a zip seam (default 10) |
+| `--pdf PAPER` | also write `pattern.pdf`, tiled over `a4` or `letter` pages |
 
 Output:
 - `out/panel_NN.svg`: 1:1 scale in mm with a 50 mm scale bar to check
@@ -83,6 +218,9 @@ Output:
   panel they join.
 - `out/layout.svg` (with `--sheet-width`): all pieces on the sheet, and the
   length of sheet needed.
+- `out/trim_NN.svg`: trim strips, from edges finished with a trim.
+- `out/pattern.pdf` (with `--pdf`): pieces tiled for home printing, with
+  the materials list and assembly guide.
 - `out/report.json`: per-panel stretch range, areas, flat and cut sizes,
   notches; per-seam lengths before and after matching; layout placements. Heatmap colours: blue = slack (σ < 1), white = unstretched,
 orange = stretched (σ > 1).
@@ -161,7 +299,9 @@ to GitHub Pages (Settings → Pages → Source must be "GitHub Actions").
 - `crates/cli` (`latexpat`): argument parsing and file I/O.
 - `crates/wasm` (`latexpat-wasm`): WebAssembly module with a JSON-in,
   JSON-out `call` export; no binding generator needed.
-- `web/`: static web UI using that module.
+- `web/`: static web UI using that module, with a WebGL viewer.
+- `assets/body/`: the packed body model and its licence notes;
+  `tools/build_body_model.py` rebuilds it.
 - `tests/data`: small test meshes, regenerated by
   `cargo run -p latexpat-core --example gen_test_data -- tests/data`.
 
@@ -187,7 +327,8 @@ to GitHub Pages (Settings → Pages → Source must be "GitHub Actions").
    fixed-width sheet (rotation only, never mirrored, since latex has a
    shiny and a matte face).
 9. `flatten::orient` + `svg::panel_svg` / `svg::layout_svg`: upright
-   placement and SVG export.
+   placement and SVG export; `pdf::pattern_pdf` tiles the pieces for
+   printing and `assembly::assembly_steps` writes the gluing order.
 
 `body::torso` builds the mesh and seams from measurements, and `job::run`
 wraps steps 2–9 into one call returning SVG strings, a report and warnings;
@@ -219,6 +360,7 @@ flatten to sides 3.1 mm apart; matching removes the gap edge by edge
 4. ✅ Swatch calibration → per-sheet ease, stiffness-weighted seam matching.
 5. ✅ Parametric torso from measurements; web UI via WASM.
 
-Possible next steps: arms, legs and shoulders on the parametric body;
-polygon nesting; per-direction swatch calibration; drawing seams on a mesh
-in the web UI.
+Next, towards designing whole garments: full body from measurements with a
+3D view and project files (done); garments drawn on the body (done); fit
+tools (done); materials and colour (done); construction details and print output
+(done); templates (done). Later: posing the body.

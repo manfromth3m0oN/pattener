@@ -11,7 +11,7 @@ name = "latexpat"
 path = "src/main.rs"
 
 [dependencies]
-latexpat-core = { workspace = true, features = ["serde"] }
+latexpat-core = { workspace = true, features = ["serde", "bundled-body"] }
 serde.workspace = true
 serde_json.workspace = true
 clap.workspace = true
