@@ -8,16 +8,14 @@ use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use latexpat_core::arap::ArapOptions;
 use latexpat_core::calibrate::{calibrate, Calibration, CalibrationResult, SheetFit};
-use latexpat_core::cut::cut_panels;
-use latexpat_core::glam::{DVec2, DVec3};
-use latexpat_core::nest::{nest, Layout, NestOptions};
+use latexpat_core::glam::DVec3;
+use latexpat_core::job::{self, EaseSpec, JobOptions, JobOutput, Report};
+use latexpat_core::nest::NestOptions;
 use latexpat_core::obj::parse_obj;
-use latexpat_core::pattern::{build_pattern, PatternOptions};
+use latexpat_core::pattern::PatternOptions;
 use latexpat_core::seams::AllowanceSide;
-use latexpat_core::svg::{layout_svg, panel_svg, EdgeLabel, HeatmapMetric, SvgOptions};
-use latexpat_core::{
-    flatten_garment, Ease, FlatPanel, FlattenOptions, SeamMatching, SeamReport, SeamSet,
-};
+use latexpat_core::svg::HeatmapMetric;
+use latexpat_core::{SeamMatching, SeamSet};
 use serde::Serialize;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -178,70 +176,12 @@ enum Heatmap {
     Area,
 }
 
-#[derive(Serialize)]
-struct Report {
-    mesh: String,
-    scale: f64,
-    calibration: Option<CalibrationResult>,
-    panels: Vec<PanelReport>,
-    seams: Vec<SeamPairReport>,
-    layout: Option<LayoutReport>,
-}
-
-#[derive(Serialize)]
-struct LayoutReport {
-    file: String,
-    sheet_width_mm: f64,
-    length_mm: f64,
-    utilisation: f64,
-    placements: Vec<latexpat_core::nest::Placement>,
-}
-
-#[derive(Serialize)]
-struct SeamPairReport {
-    seam: String,
-    left_panel: usize,
-    right_panel: usize,
-    edges: usize,
-    body_length_mm: f64,
-    left_length_mm: f64,
-    right_length_mm: f64,
-    mismatch_mm: f64,
-    mismatch_before_matching_mm: f64,
-}
-
-#[derive(Serialize)]
-struct PanelReport {
-    index: usize,
-    file: String,
-    sheet: Option<String>,
-    ease: f64,
-    seams: Vec<String>,
-    vertices: usize,
-    triangles: usize,
-    min_stretch: f64,
-    max_stretch: f64,
-    mean_area_stretch: f64,
-    body_area_mm2: f64,
-    flat_area_mm2: f64,
-    flat_width_mm: f64,
-    flat_height_mm: f64,
-    cut_width_mm: f64,
-    cut_height_mm: f64,
-    notches: Vec<u32>,
-    flipped_triangles: Vec<u32>,
-    arap_iterations: usize,
-}
-
 fn main() -> Result<()> {
     match Cli::parse().command {
         Command::Flatten(args) => flatten(args),
         Command::Calibrate(args) => calibrate_cmd(args),
     }
 }
-
-/// Ease spec, per-panel stiffness, and per-panel (ease, sheet label).
-type PanelSetup = (Ease, Option<Vec<f64>>, Vec<(f64, Option<String>)>);
 
 fn load_calibration(path: &Path) -> Result<CalibrationResult> {
     let t = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
@@ -290,23 +230,6 @@ fn warn_fit(s: &SheetFit) {
     }
 }
 
-/// Resolve a sheet name, or a thickness like "0.5mm", to (ease, stiffness μt, label).
-fn resolve_sheet(r: &CalibrationResult, spec: &str) -> Result<(f64, f64, String)> {
-    if let Some(s) = r.sheet(spec) {
-        return Ok((s.ease, s.shear_modulus_mpa * s.thickness_mm, s.name.clone()));
-    }
-    let num = spec.trim().trim_end_matches("mm").trim();
-    if let Ok(t) = num.parse::<f64>() {
-        return Ok((
-            r.ease_for_thickness(t)?,
-            r.pooled_shear_modulus_mpa * t,
-            format!("{t} mm (pooled fit)"),
-        ));
-    }
-    let names: Vec<&str> = r.sheets.iter().map(|s| s.name.as_str()).collect();
-    bail!("unknown sheet '{spec}'; use one of {names:?} or a thickness such as 0.5mm")
-}
-
 fn flatten(args: FlattenArgs) -> Result<()> {
     if !(args.scale > 0.0 && args.scale.is_finite()) {
         bail!("--scale must be a positive number");
@@ -337,22 +260,14 @@ fn flatten(args: FlattenArgs) -> Result<()> {
         None => SeamSet::default(),
     };
 
-    // Ease (and stiffness) per panel: uniform, or from the calibrated sheets.
-    let n_panels = cut_panels(&mesh, &seams.resolve(&mesh)?)?.len();
-    let mut calibration = None;
-    let (ease, stiffness, panel_sheets): PanelSetup = match &args.calibration {
-        None => {
-            let e = args.ease.unwrap_or(0.85);
-            if !(e > 0.0 && e.is_finite()) {
-                bail!("--ease must be a positive number");
-            }
-            (Ease::Uniform(e), None, vec![(e, None); n_panels])
-        }
+    let ease = match &args.calibration {
+        None => EaseSpec::Uniform(args.ease.unwrap_or(0.85)),
         Some(path) => {
-            let r = load_calibration(path)?;
-            r.sheets.iter().for_each(warn_fit);
-            let default = args.sheet.as_deref().expect("clap requires --sheet");
-            let mut specs = vec![default.to_string(); n_panels];
+            let t =
+                fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+            let calibration: Calibration =
+                serde_json::from_str(&t).with_context(|| format!("parsing {}", path.display()))?;
+            let mut panel_sheets = Vec::new();
             for ps in &args.panel_sheet {
                 let (i, name) = ps
                     .split_once('=')
@@ -361,26 +276,16 @@ fn flatten(args: FlattenArgs) -> Result<()> {
                     .trim()
                     .parse()
                     .with_context(|| format!("bad panel index in '{ps}'"))?;
-                if i >= n_panels {
-                    bail!("--panel-sheet: panel {i} does not exist (the seams make {n_panels} panels)");
-                }
-                specs[i] = name.to_string();
+                panel_sheets.push((i, name.to_string()));
             }
-            let mut eases = Vec::new();
-            let mut k = Vec::new();
-            let mut info = Vec::new();
-            for spec in &specs {
-                let (e, stiff, label) = resolve_sheet(&r, spec)?;
-                eases.push(e);
-                k.push(stiff);
-                info.push((e, Some(label)));
+            EaseSpec::Calibrated {
+                calibration,
+                sheet: args.sheet.clone().expect("clap requires --sheet"),
+                panel_sheets,
             }
-            calibration = Some(r);
-            (Ease::per_panel(&mesh, &seams, &eases)?, Some(k), info)
         }
     };
-
-    let opts = FlattenOptions {
+    let opts = JobOptions {
         ease,
         arap: ArapOptions {
             max_iterations: args.max_iterations,
@@ -391,241 +296,108 @@ fn flatten(args: FlattenArgs) -> Result<()> {
             weight: args.seam_weight,
             ..Default::default()
         }),
-        panel_stiffness: stiffness,
-    };
-    let garment = flatten_garment(&mesh, &seams, &opts)?;
-    let panels = &garment.panels;
-    let pieces = build_pattern(
-        &garment,
-        &seams,
-        &PatternOptions {
+        seam_tolerance: args.seam_tolerance,
+        pattern: PatternOptions {
             seam_allowance: args.glue_allowance,
             allowance_side: args.allowance_side.into(),
             hem_allowance: args.hem_allowance,
             notch_spacing: (args.notch_spacing > 0.0).then_some(args.notch_spacing),
         },
-    );
-
-    fs::create_dir_all(&args.output)
-        .with_context(|| format!("creating {}", args.output.display()))?;
-    let heatmap = match args.heatmap {
-        Heatmap::None => None,
-        Heatmap::Max => Some(HeatmapMetric::MaxStretch),
-        Heatmap::Area => Some(HeatmapMetric::AreaStretch),
+        heatmap: match args.heatmap {
+            Heatmap::None => None,
+            Heatmap::Max => Some(HeatmapMetric::MaxStretch),
+            Heatmap::Area => Some(HeatmapMetric::AreaStretch),
+        },
+        heatmap_range: args.heatmap_range,
+        sheet: args.sheet_width.map(|w| NestOptions {
+            sheet_width: w,
+            gap: args.sheet_gap,
+            allow_rotation: !args.no_rotate,
+        }),
     };
+    let out = job::run(&mesh, &seams, &opts)?;
+    write_job(
+        &args.output,
+        &args.mesh.display().to_string(),
+        args.scale,
+        &out,
+    )
+}
 
-    let mut report = Report {
-        mesh: args.mesh.display().to_string(),
-        scale: args.scale,
-        calibration,
-        panels: vec![],
-        seams: vec![],
-        layout: None,
-    };
+/// Write a job's files and print its summary tables and warnings.
+fn write_job(dir: &Path, mesh: &str, scale: f64, out: &JobOutput) -> Result<()> {
+    fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    let r = &out.report;
     println!(
         "{:<10} {:>6} {:>6} {:>9} {:>9} {:>9} {:>17}  seams",
         "panel", "tris", "ease", "min σ", "max σ", "area ×", "size (mm)"
     );
-    for (i, fp) in panels.iter().enumerate() {
-        let names = seam_names(fp, &seams);
-        let file = format!("panel_{i:02}.svg");
-        let label = if names.is_empty() {
-            format!("panel {i}")
-        } else {
-            format!("panel {i} — {}", names.join(", "))
-        };
-        let svg = panel_svg(
-            fp,
-            &pieces[i],
-            &SvgOptions {
-                heatmap,
-                range: args.heatmap_range,
-                label: Some(label),
-                edge_labels: edge_labels(i, &garment.seams, &seams),
-                ..Default::default()
-            },
-        );
-        write(&args.output.join(&file), &svg)?;
-
-        let size = fp.uv.iter().fold(DVec2::ZERO, |m, p| m.max(*p));
-        let cut_size = {
-            let o = &pieces[i].cut_outline;
-            let lo = o.iter().fold(DVec2::splat(f64::INFINITY), |m, p| m.min(*p));
-            o.iter().fold(DVec2::ZERO, |m, p| m.max(*p - lo))
-        };
-        let s = &fp.strain;
+    for (p, svg) in r.panels.iter().zip(&out.panel_svgs) {
+        write(&dir.join(&p.file), svg)?;
         println!(
             "{:<10} {:>6} {:>6.3} {:>9.4} {:>9.4} {:>9.4} {:>8.1} × {:<6.1}  {}",
-            i,
-            fp.panel.triangles.len(),
-            panel_sheets[i].0,
-            s.min_stretch,
-            s.max_stretch,
-            s.mean_area_stretch,
-            size.x,
-            size.y,
-            names.join(", ")
+            p.index,
+            p.triangles,
+            p.ease,
+            p.min_stretch,
+            p.max_stretch,
+            p.mean_area_stretch,
+            p.flat_width_mm,
+            p.flat_height_mm,
+            p.seams.join(", ")
         );
-        if !pieces[i].cut_outline_simple {
-            eprintln!(
-                "warning: panel {i}: the allowance makes the cut line cross itself \
-                 (an edge curves inwards more tightly than the allowance); check the SVG"
-            );
-        }
-        if !s.flipped.is_empty() {
-            eprintln!(
-                "warning: panel {i} has {} flipped triangle(s) in the flat layout",
-                s.flipped.len()
-            );
-        }
-        report.panels.push(PanelReport {
-            index: i,
-            file,
-            sheet: panel_sheets[i].1.clone(),
-            ease: panel_sheets[i].0,
-            seams: names,
-            vertices: fp.panel.vertex_count(),
-            triangles: fp.panel.triangles.len(),
-            min_stretch: s.min_stretch,
-            max_stretch: s.max_stretch,
-            mean_area_stretch: s.mean_area_stretch,
-            body_area_mm2: s.body_area,
-            flat_area_mm2: s.flat_area,
-            flat_width_mm: size.x,
-            flat_height_mm: size.y,
-            cut_width_mm: cut_size.x,
-            cut_height_mm: cut_size.y,
-            notches: pieces[i].notches.iter().map(|n| n.number).collect(),
-            flipped_triangles: s.flipped.clone(),
-            arap_iterations: fp.arap_iterations,
-        });
     }
-    if !garment.seams.is_empty() {
+    if !r.seams.is_empty() {
         println!();
         println!(
             "{:<16} {:>9} {:>9} {:>9} {:>9} {:>17}",
             "seam", "panels", "body", "left", "right", "mismatch (mm)"
         );
     }
-    for sr in &garment.seams {
-        let (l, r) = (sr.pair.left.panel, sr.pair.right.panel);
-        let name = seam_name(&seams, sr.pair.seam);
+    for s in &r.seams {
         println!(
             "{:<16} {:>9} {:>9.1} {:>9.1} {:>9.1} {:>+8.2} (was {:+.2})",
-            name,
-            format!("{l}↔{r}"),
-            sr.lengths.body,
-            sr.lengths.left,
-            sr.lengths.right,
-            sr.lengths.mismatch(),
-            sr.unmatched.mismatch()
+            s.seam,
+            format!("{}↔{}", s.left_panel, s.right_panel),
+            s.body_length_mm,
+            s.left_length_mm,
+            s.right_length_mm,
+            s.mismatch_mm,
+            s.mismatch_before_matching_mm
         );
-        if sr.lengths.mismatch().abs() > args.seam_tolerance {
-            eprintln!(
-                "warning: seam '{name}' between panels {l} and {r}: sides differ by {:.2} mm \
-                 (tolerance {} mm); the longer side will need easing in",
-                sr.lengths.mismatch().abs(),
-                args.seam_tolerance
-            );
-        }
-        report.seams.push(SeamPairReport {
-            seam: name,
-            left_panel: l,
-            right_panel: r,
-            edges: sr.pair.left.edges.len(),
-            body_length_mm: sr.lengths.body,
-            left_length_mm: sr.lengths.left,
-            right_length_mm: sr.lengths.right,
-            mismatch_mm: sr.lengths.mismatch(),
-            mismatch_before_matching_mm: sr.unmatched.mismatch(),
-        });
     }
-
-    if let Some(width) = args.sheet_width {
-        let outlines: Vec<_> = pieces.iter().map(|p| p.cut_outline.clone()).collect();
-        let layout: Layout = nest(
-            &outlines,
-            &NestOptions {
-                sheet_width: width,
-                gap: args.sheet_gap,
-                allow_rotation: !args.no_rotate,
-            },
-        )?;
-        let labels: Vec<String> = (0..pieces.len()).map(|i| format!("panel {i}")).collect();
-        write(
-            &args.output.join("layout.svg"),
-            &layout_svg(&outlines, &labels, &layout),
-        )?;
+    if let (Some(l), Some(svg)) = (&r.layout, &out.layout_svg) {
+        write(&dir.join(&l.file), svg)?;
         println!();
         println!(
-            "layout: {:.0} mm of {:.0} mm wide sheet ({:.0}% used) → layout.svg",
-            layout.length,
-            width,
-            100.0 * layout.utilisation
+            "layout: {:.0} mm of {:.0} mm wide sheet ({:.0}% used) → {}",
+            l.length_mm,
+            l.sheet_width_mm,
+            100.0 * l.utilisation,
+            l.file
         );
-        report.layout = Some(LayoutReport {
-            file: "layout.svg".into(),
-            sheet_width_mm: width,
-            length_mm: layout.length,
-            utilisation: layout.utilisation,
-            placements: layout.placements,
-        });
+    }
+    for w in &out.warnings {
+        eprintln!("warning: {w}");
     }
 
+    #[derive(Serialize)]
+    struct FileReport<'a> {
+        mesh: &'a str,
+        scale: f64,
+        #[serde(flatten)]
+        report: &'a Report,
+    }
     write(
-        &args.output.join("report.json"),
-        &serde_json::to_string_pretty(&report)?,
+        &dir.join("report.json"),
+        &serde_json::to_string_pretty(&FileReport {
+            mesh,
+            scale,
+            report: r,
+        })?,
     )?;
-    println!(
-        "wrote {} panel(s) to {}",
-        panels.len(),
-        args.output.display()
-    );
+    println!("wrote {} panel(s) to {}", r.panels.len(), dir.display());
     Ok(())
-}
-
-fn seam_name(seams: &SeamSet, id: u32) -> String {
-    seams.seams[id as usize]
-        .name
-        .clone()
-        .unwrap_or_else(|| format!("seam {id}"))
-}
-
-/// Labels for panel `panel`'s seam edges: "name ↔ panel N".
-fn edge_labels(panel: usize, pairs: &[SeamReport], seams: &SeamSet) -> Vec<EdgeLabel> {
-    let mut out = Vec::new();
-    for sr in pairs {
-        let name = seam_name(seams, sr.pair.seam);
-        let (l, r) = (&sr.pair.left, &sr.pair.right);
-        for (side, other) in [(l, r.panel), (r, l.panel)] {
-            if side.panel == panel {
-                let text = if other == panel {
-                    format!("{name} (joins itself)")
-                } else {
-                    format!("{name} ↔ panel {other}")
-                };
-                out.push(EdgeLabel {
-                    edges: side.edges.clone(),
-                    text,
-                });
-            }
-        }
-    }
-    out
-}
-
-/// Names of the seams on a panel's boundary, in loop order, deduplicated.
-fn seam_names(fp: &FlatPanel, seams: &SeamSet) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    for e in &fp.panel.boundary {
-        if let Some(id) = e.seam {
-            let name = seam_name(seams, id);
-            if !out.contains(&name) {
-                out.push(name);
-            }
-        }
-    }
-    out
 }
 
 fn write(path: &Path, contents: &str) -> Result<()> {

@@ -126,7 +126,7 @@ const DEFAULT_BIAS: f64 = 0.5;
 /// Build a torso mesh and its seams from measurements.
 pub fn torso(m: &BodyMeasurements, opts: &BodyOptions) -> Result<Body> {
     let n = opts.around;
-    if n < 16 || n % 4 != 0 {
+    if n < 16 || !n.is_multiple_of(4) {
         return Err(Error::Body(format!(
             "'around' must be a multiple of 4 and at least 16, got {n}"
         )));
