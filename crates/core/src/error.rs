@@ -45,8 +45,14 @@ pub enum Error {
 
     /// A panel produced by cutting is not a topological disc.
     #[error(
-        "panel {panel} is not a topological disc (Euler characteristic {euler_characteristic}, \
-         {boundary_loops} boundary loop(s)); add seams so that every panel can be laid flat"
+        "panel {panel} cannot be laid flat: {}",
+        if *boundary_loops > 1 {
+            format!("it still wraps around the body ({boundary_loops} separate edges); add a seam joining two of them")
+        } else if *boundary_loops == 0 {
+            "it is a closed surface with no edge; add an edge curve or seams".to_string()
+        } else {
+            format!("it is not a simple piece (Euler characteristic {euler_characteristic}); add seams to split it")
+        }
     )]
     NotADisc {
         panel: usize,
@@ -73,6 +79,14 @@ pub enum Error {
         height: f64,
         sheet_width: f64,
     },
+
+    /// A latex sheet or material plan is invalid.
+    #[error("materials: {0}")]
+    Material(String),
+
+    /// A garment design cannot be built.
+    #[error("garment: {0}")]
+    Garment(String),
 
     /// Body measurements are invalid.
     #[error("body: {0}")]

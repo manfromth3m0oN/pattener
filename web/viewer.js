@@ -9,21 +9,24 @@ class Viewer {
     if (!gl) throw new Error('this browser does not support WebGL2');
     this.gl = gl;
     this.mesh = null;
+    this.overlay = null;
     this.lines = [];
+    this.marks = null;
     this.color = [0.82, 0.78, 0.74];
+    this.overlayColor = [0.16, 0.16, 0.18];
     this.resetView();
 
     const vs = `#version 300 es
       uniform mat4 mvp; uniform mat4 model;
-      in vec3 pos; in vec3 nrm; out vec3 n;
-      void main() { n = mat3(model) * nrm; gl_Position = mvp * vec4(pos, 1.0); }`;
+      in vec3 pos; in vec3 nrm; in vec3 col; out vec3 n; out vec3 c;
+      void main() { n = mat3(model) * nrm; c = col; gl_Position = mvp * vec4(pos, 1.0); }`;
     const fs = `#version 300 es
       precision mediump float;
-      uniform vec3 color; uniform float lit; in vec3 n; out vec4 o;
+      uniform vec3 color; uniform float lit; uniform float useCol; uniform vec3 light; in vec3 n; in vec3 c; out vec4 o;
       void main() {
-        vec3 l = normalize(vec3(0.4, 0.6, 1.0));
-        float d = lit > 0.5 ? 0.35 + 0.65 * max(dot(normalize(n), l), 0.0) : 1.0;
-        o = vec4(color * d, 1.0);
+        vec3 l = light;
+        float d = lit > 0.5 ? 0.45 + 0.55 * max(dot(normalize(n), l), 0.0) : 1.0;
+        o = vec4(mix(color, c, useCol) * d, 1.0);
       }`;
     this.prog = this._program(vs, fs);
     this.loc = {
@@ -33,13 +36,42 @@ class Viewer {
       model: gl.getUniformLocation(this.prog, 'model'),
       color: gl.getUniformLocation(this.prog, 'color'),
       lit: gl.getUniformLocation(this.prog, 'lit'),
+      useCol: gl.getUniformLocation(this.prog, 'useCol'),
+      light: gl.getUniformLocation(this.prog, 'light'),
+      col: gl.getAttribLocation(this.prog, 'col'),
     };
 
-    let drag = null;
-    canvas.addEventListener('pointerdown', (e) => { drag = [e.clientX, e.clientY]; canvas.setPointerCapture(e.pointerId); });
-    canvas.addEventListener('pointerup', () => { drag = null; });
+    this.onClick = null;
+    // onPress(e) may return true to claim a drag (then onDrag / onDragEnd
+    // get the pointer events instead of orbiting the view).
+    this.onPress = null;
+    this.onDrag = null;
+    this.onDragEnd = null;
+    let drag = null, travelled = 0, claimed = false;
+    canvas.addEventListener('pointerdown', (e) => {
+      drag = [e.clientX, e.clientY];
+      travelled = 0;
+      claimed = !!(this.onPress && this.onPress(e));
+      canvas.setPointerCapture(e.pointerId);
+    });
+    canvas.addEventListener('pointerup', (e) => {
+      if (claimed) {
+        if (this.onDragEnd) this.onDragEnd(e);
+      } else if (drag && travelled < 5 && this.onClick) {
+        // A click (not a drag) picks a point on the surface.
+        this.onClick(e);
+      }
+      drag = null;
+      claimed = false;
+    });
     canvas.addEventListener('pointermove', (e) => {
       if (!drag) return;
+      travelled += Math.abs(e.clientX - drag[0]) + Math.abs(e.clientY - drag[1]);
+      if (claimed) {
+        if (this.onDrag) this.onDrag(e);
+        drag = [e.clientX, e.clientY];
+        return;
+      }
       this.yaw += (e.clientX - drag[0]) * 0.01;
       this.pitch = Math.max(-1.4, Math.min(1.4, this.pitch + (e.clientY - drag[1]) * 0.01));
       drag = [e.clientX, e.clientY];
@@ -82,7 +114,20 @@ class Viewer {
   }
 
   // positions: Float32Array (x, y, z per vertex, mm); triangles: Uint32Array.
-  setMesh(positions, triangles) {
+  // overlay: optional Uint32Array of triangles drawn in overlayColor (the
+  // garment) instead of the base colour.
+  // overlayColors: optional Float32Array (r, g, b per vertex) colouring the
+  // overlay instead of overlayColor.
+  // pieces: optional array of { triangles: Uint32Array, color: [r, g, b] },
+  // drawn instead of `overlay`, each in its own colour.
+  setMesh(positions, triangles, overlay = null, overlayColors = null, pieces = null) {
+    if (pieces && pieces.length) {
+      let n = 0;
+      pieces.forEach((p) => { n += p.triangles.length; });
+      overlay = new Uint32Array(n);
+      let at = 0;
+      pieces.forEach((p) => { overlay.set(p.triangles, at); at += p.triangles.length; });
+    }
     const normals = new Float32Array(positions.length);
     for (let t = 0; t < triangles.length; t += 3) {
       const [a, b, c] = [triangles[t] * 3, triangles[t + 1] * 3, triangles[t + 2] * 3];
@@ -101,18 +146,104 @@ class Viewer {
     this.center = [0, 1, 2].map((k) => (lo[k] + hi[k]) / 2);
     this.radius = Math.max(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]) / 2;
     const gl = this.gl;
+    let base = triangles;
+    if (overlay && overlay.length) {
+      const key = (a, b, c) => `${a},${b},${c}`;
+      const inOverlay = new Set();
+      for (let t = 0; t < overlay.length; t += 3) inOverlay.add(key(overlay[t], overlay[t + 1], overlay[t + 2]));
+      const keep = [];
+      for (let t = 0; t < triangles.length; t += 3) {
+        if (!inOverlay.has(key(triangles[t], triangles[t + 1], triangles[t + 2]))) keep.push(triangles[t], triangles[t + 1], triangles[t + 2]);
+      }
+      base = new Uint32Array(keep);
+    }
     this.mesh = {
       pos: this._buffer(positions),
       nrm: this._buffer(normals),
-      idx: this._buffer(triangles, gl.ELEMENT_ARRAY_BUFFER),
-      count: triangles.length,
+      idx: this._buffer(base, gl.ELEMENT_ARRAY_BUFFER),
+      count: base.length,
     };
+    this.overlay = overlay && overlay.length
+      ? {
+        idx: this._buffer(overlay, gl.ELEMENT_ARRAY_BUFFER),
+        count: overlay.length,
+        col: overlayColors ? this._buffer(overlayColors) : null,
+        pieces: pieces && pieces.length
+          ? pieces.map((p) => ({ idx: this._buffer(p.triangles, gl.ELEMENT_ARRAY_BUFFER), count: p.triangles.length, color: p.color }))
+          : null,
+      }
+      : null;
     this.draw();
   }
 
-  // loops: array of { points: Float32Array, color: [r, g, b] }.
+  // Screen position (CSS px, relative to the canvas) of a 3D point.
+  project(p) {
+    const m = this.mvp, r = this.canvas.getBoundingClientRect();
+    if (!m) return null;
+    const x = m[0] * p[0] + m[4] * p[1] + m[8] * p[2] + m[12];
+    const y = m[1] * p[0] + m[5] * p[1] + m[9] * p[2] + m[13];
+    const w = m[3] * p[0] + m[7] * p[1] + m[11] * p[2] + m[15];
+    if (w <= 0) return null;
+    return { x: (x / w + 1) / 2 * r.width, y: (1 - y / w) / 2 * r.height };
+  }
+
+  // Ray from the camera through a pointer event: { origin, dir }.
+  ray(e) {
+    const r = this.canvas.getBoundingClientRect();
+    const nx = ((e.clientX - r.left) / r.width) * 2 - 1;
+    const ny = 1 - ((e.clientY - r.top) / r.height) * 2;
+    const { eye, x, y, z } = this.camera;
+    const h = Math.tan(FOVY / 2), aspect = r.width / r.height;
+    const d = [0, 1, 2].map((k) => -z[k] + x[k] * nx * h * aspect + y[k] * ny * h);
+    const l = Math.hypot(...d);
+    return { origin: eye, dir: d.map((v) => v / l) };
+  }
+
+  // Nearest hit of a ray on a mesh: { face, u, v, t } with barycentric u, v
+  // of the triangle's second and third corners (Möller–Trumbore), or null.
+  static intersect(ray, positions, triangles) {
+    const { origin: o, dir: d } = ray;
+    let best = null;
+    for (let f = 0; f < triangles.length / 3; f++) {
+      const a = triangles[3 * f] * 3, b = triangles[3 * f + 1] * 3, c = triangles[3 * f + 2] * 3;
+      const e1 = [positions[b] - positions[a], positions[b + 1] - positions[a + 1], positions[b + 2] - positions[a + 2]];
+      const e2 = [positions[c] - positions[a], positions[c + 1] - positions[a + 1], positions[c + 2] - positions[a + 2]];
+      const p = [d[1] * e2[2] - d[2] * e2[1], d[2] * e2[0] - d[0] * e2[2], d[0] * e2[1] - d[1] * e2[0]];
+      const det = e1[0] * p[0] + e1[1] * p[1] + e1[2] * p[2];
+      if (Math.abs(det) < 1e-12) continue;
+      const inv = 1 / det;
+      const s = [o[0] - positions[a], o[1] - positions[a + 1], o[2] - positions[a + 2]];
+      const u = (s[0] * p[0] + s[1] * p[1] + s[2] * p[2]) * inv;
+      if (u < 0 || u > 1) continue;
+      const q = [s[1] * e1[2] - s[2] * e1[1], s[2] * e1[0] - s[0] * e1[2], s[0] * e1[1] - s[1] * e1[0]];
+      const v = (d[0] * q[0] + d[1] * q[1] + d[2] * q[2]) * inv;
+      if (v < 0 || u + v > 1) continue;
+      const t = (e2[0] * q[0] + e2[1] * q[1] + e2[2] * q[2]) * inv;
+      if (t > 0 && (!best || t < best.t)) best = { face: f, u, v, t };
+    }
+    return best;
+  }
+
+  // Small crosses at points (Float32Array x, y, z ...), size in mm.
+  setMarks(points, color, size = 8) {
+    if (!points || !points.length) { this.marks = null; this.draw(); return; }
+    const seg = [];
+    for (let i = 0; i < points.length; i += 3) {
+      for (let k = 0; k < 3; k++) {
+        const a = [points[i], points[i + 1], points[i + 2]], b = [...a];
+        a[k] -= size; b[k] += size;
+        seg.push(...a, ...b);
+      }
+    }
+    this.marks = { buf: this._buffer(new Float32Array(seg)), count: seg.length / 3, color };
+    this.draw();
+  }
+
+  // loops: array of { points: Float32Array, color: [r, g, b], closed = true }.
   setLines(loops) {
-    this.lines = loops.map((l) => ({ buf: this._buffer(l.points), count: l.points.length / 3, color: l.color }));
+    this.lines = loops.map((l) => ({
+      buf: this._buffer(l.points), count: l.points.length / 3, color: l.color, closed: l.closed !== false,
+    }));
     this.draw();
   }
 
@@ -135,9 +266,16 @@ class Viewer {
       this.center[1] + dist * Math.sin(this.pitch),
       this.center[2] + dist * Math.cos(this.yaw) * Math.cos(this.pitch),
     ];
-    const proj = perspective(0.6, w / h, dist * 0.05, dist * 4);
+    const proj = perspective(FOVY, w / h, dist * 0.05, dist * 4);
     const view = lookAt(eye, this.center, [0, 1, 0]);
-    gl.uniformMatrix4fv(this.loc.mvp, false, mul(proj, view));
+    this.camera = { eye, ...basis(eye, this.center, [0, 1, 0]) };
+    // Headlight: from the camera, a little above and to the side.
+    const { x: cx, y: cy, z: cz } = this.camera;
+    const l = [0, 1, 2].map((k) => cz[k] + 0.5 * cy[k] + 0.3 * cx[k]);
+    const ll = Math.hypot(...l);
+    gl.uniform3fv(this.loc.light, l.map((v) => v / ll));
+    this.mvp = mul(proj, view);
+    gl.uniformMatrix4fv(this.loc.mvp, false, this.mvp);
     gl.uniformMatrix4fv(this.loc.model, false, [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
 
     // Body, pushed back slightly so lines on its surface stay visible.
@@ -153,6 +291,28 @@ class Viewer {
     gl.vertexAttribPointer(this.loc.nrm, 3, gl.FLOAT, false, 0, 0);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.mesh.idx);
     gl.drawElements(gl.TRIANGLES, this.mesh.count, gl.UNSIGNED_INT, 0);
+    gl.uniform1f(this.loc.useCol, 0);
+    if (this.overlay) {
+      gl.uniform3fv(this.loc.color, this.overlayColor);
+      if (this.overlay.col && this.loc.col >= 0) {
+        gl.uniform1f(this.loc.useCol, 1);
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.overlay.col);
+        gl.enableVertexAttribArray(this.loc.col);
+        gl.vertexAttribPointer(this.loc.col, 3, gl.FLOAT, false, 0, 0);
+      }
+      if (this.overlay.pieces && !this.overlay.col) {
+        for (const p of this.overlay.pieces) {
+          gl.uniform3fv(this.loc.color, p.color);
+          gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, p.idx);
+          gl.drawElements(gl.TRIANGLES, p.count, gl.UNSIGNED_INT, 0);
+        }
+      } else {
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.overlay.idx);
+        gl.drawElements(gl.TRIANGLES, this.overlay.count, gl.UNSIGNED_INT, 0);
+      }
+      if (this.loc.col >= 0) gl.disableVertexAttribArray(this.loc.col);
+      gl.uniform1f(this.loc.useCol, 0);
+    }
     gl.disable(gl.POLYGON_OFFSET_FILL);
 
     gl.uniform1f(this.loc.lit, 0);
@@ -162,9 +322,26 @@ class Viewer {
       gl.uniform3fv(this.loc.color, l.color);
       gl.bindBuffer(gl.ARRAY_BUFFER, l.buf);
       gl.vertexAttribPointer(this.loc.pos, 3, gl.FLOAT, false, 0, 0);
-      gl.drawArrays(gl.LINE_LOOP, 0, l.count);
+      gl.drawArrays(l.closed ? gl.LINE_LOOP : gl.LINE_STRIP, 0, l.count);
+    }
+    if (this.marks) {
+      gl.uniform3fv(this.loc.color, this.marks.color);
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.marks.buf);
+      gl.vertexAttribPointer(this.loc.pos, 3, gl.FLOAT, false, 0, 0);
+      gl.drawArrays(gl.LINES, 0, this.marks.count);
     }
   }
+}
+
+const FOVY = 0.6;
+
+// Camera axes for lookAt: x right, y up, z towards the eye.
+function basis(eye, at, up) {
+  const norm = (a) => { const l = Math.hypot(...a); return a.map((v) => v / l); };
+  const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+  const z = norm(eye.map((v, i) => v - at[i]));
+  const x = norm(cross(up, z));
+  return { x, y: cross(z, x), z };
 }
 
 function perspective(fovy, aspect, near, far) {

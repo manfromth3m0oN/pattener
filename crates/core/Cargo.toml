@@ -20,3 +20,8 @@ serde = { workspace = true, optional = true }
 
 [dev-dependencies]
 approx.workspace = true
+serde_json.workspace = true
+
+[[example]]
+name = "gen_garment_examples"
+required-features = ["serde", "bundled-body"]

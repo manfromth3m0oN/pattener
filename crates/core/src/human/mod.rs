@@ -6,11 +6,13 @@
 //! - [`mod@fit`]: solving the shape parameters so the body matches a set of
 //!   measurements.
 
+pub mod along;
 pub mod fit;
 pub mod measure;
 pub mod model;
 pub mod slice;
 
+pub use along::along_body;
 pub use fit::{fit, HumanBody, Measured, Measurements, ShapeOptions};
 pub use measure::{MeasureKind, Measurer};
 pub use model::{BodyModel, Shape, Target};

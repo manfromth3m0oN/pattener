@@ -19,19 +19,26 @@
 //! { "command": "pattern", "obj": "v ...", "seams": {"seams": [...]}, "scale": 1, "options": { ... } }
 //! { "command": "calibrate", "calibration": { "sheets": [...], "target": ... } }
 //! { "command": "human", "body": { "measurements": {"height": 1680, ...}, "shape": {...} } }
+//! { "command": "garment", "body": {...}, "design": {...}, "pattern": false, "options": {...} }
 //! ```
-//! `options` for `pattern` is a [`JobOptions`] (every field optional).
+//! `options` for `pattern` is a [`JobOptions`] (every field optional); with
+//! `"print": {"paper": "a4"}` the output carries a tiled PDF as `pdf`.
 //! Responses are `{"ok": true, ...}` or `{"ok": false, "error": "..."}`.
 
 use latexpat_core::body::{torso, BodyMeasurements, BodyOptions};
 use latexpat_core::calibrate::{calibrate, Calibration};
-use latexpat_core::human::{fit, BodyModel, Measurer};
+use latexpat_core::cut::cut_panels;
+use latexpat_core::garment::{build, material_plan, panel_faces, zones_on, GarmentDesign};
+use latexpat_core::glam::DVec3;
+use latexpat_core::human::{along_body, fit, BodyModel, HumanBody, Measurer};
 use latexpat_core::job::{self, JobOptions};
+use latexpat_core::materials::Sheet;
 use latexpat_core::obj::{parse_obj, write_obj};
 use latexpat_core::project::BodySpec;
 use latexpat_core::SeamSet;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::cell::RefCell;
 use std::sync::OnceLock;
 
 #[derive(Deserialize)]
@@ -59,6 +66,48 @@ enum Request {
         #[serde(default)]
         body: BodySpec,
     },
+    Garment {
+        #[serde(default)]
+        body: BodySpec,
+        #[serde(default)]
+        design: GarmentDesign,
+        /// Also make the pattern (otherwise just the preview).
+        #[serde(default)]
+        pattern: bool,
+        /// The project's latex sheets.
+        #[serde(default)]
+        materials: Vec<Sheet>,
+        #[serde(default)]
+        options: JobOptions,
+    },
+}
+
+thread_local! {
+    /// The last fitted body, keyed by its spec, so editing a garment does
+    /// not refit the body.
+    static FITTED: RefCell<Option<(String, HumanBody)>> = const { RefCell::new(None) };
+}
+
+fn fitted(spec: &BodySpec) -> Result<HumanBody, String> {
+    let key = serde_json::to_string(spec).map_err(|e| e.to_string())?;
+    if let Some(b) = FITTED.with(|c| {
+        c.borrow()
+            .as_ref()
+            .filter(|(k, _)| *k == key)
+            .map(|(_, b)| b.clone())
+    }) {
+        return Ok(b);
+    }
+    let (model, measurer) = human();
+    let b = fit(model, measurer, &spec.measurements, &spec.shape).map_err(|e| e.to_string())?;
+    FITTED.with(|c| *c.borrow_mut() = Some((key, b.clone())));
+    Ok(b)
+}
+
+fn flat3(points: impl Iterator<Item = DVec3>) -> Vec<f32> {
+    points
+        .flat_map(|p| [p.x as f32, p.y as f32, p.z as f32])
+        .collect()
 }
 
 /// The body model and measurer, loaded once.
@@ -137,6 +186,115 @@ fn run(request: &str) -> Result<Value, String> {
                 "parameters": b.parameters,
                 "iterations": b.iterations,
                 "obj": write_obj(&b.mesh),
+            }))
+        }
+        Request::Garment {
+            body,
+            design,
+            pattern,
+            materials,
+            options,
+        } => {
+            let b = fitted(&body)?;
+            let g = build(&b.mesh, &design).map_err(|e| e.to_string())?;
+            let garment_triangles: Vec<u32> = g
+                .body
+                .triangles()
+                .iter()
+                .zip(&g.region)
+                .filter(|(_, &r)| r)
+                .flat_map(|(t, _)| *t)
+                .collect();
+            let curves: Vec<Value> = g
+                .curves
+                .iter()
+                .map(|c| {
+                    let pts = flat3(c.vertices.iter().map(|&v| g.body.positions()[v as usize]));
+                    json!({ "name": c.name, "kind": c.kind, "closed": c.closed, "points": pts })
+                })
+                .collect();
+            // Can the garment be cut into flat panels as drawn?
+            let panels = g.mesh.as_ref().map(|m| {
+                g.seams
+                    .resolve(m)
+                    .and_then(|e| cut_panels(m, &e))
+                    .map(|p| p.len())
+                    .map_err(|e| e.to_string())
+            });
+            let zones = zones_on(&b.mesh, &design).map_err(|e| e.to_string())?;
+            // Each piece with its sheet, for the colour preview.
+            let (plan, mut plan_warnings) =
+                material_plan(&b.mesh, &g, &design, &materials).map_err(|e| e.to_string())?;
+            let mut pieces = Vec::new();
+            if let (Some(gm), true) = (&g.mesh, panels.as_ref().is_some_and(|p| p.is_ok())) {
+                for (pi, faces) in panel_faces(&g)
+                    .map_err(|e| e.to_string())?
+                    .iter()
+                    .enumerate()
+                {
+                    let tris: Vec<u32> = faces
+                        .iter()
+                        .flat_map(|&f| {
+                            gm.triangles()[f as usize].map(|v| g.vertex_origin[v as usize])
+                        })
+                        .collect();
+                    let sheet = plan.as_ref().map(|p| &p.sheets[p.panel_sheet[pi]]);
+                    pieces.push(json!({
+                        "triangles": tris,
+                        "sheet": sheet.map(|s| s.name.clone()),
+                        "color": sheet.map(|s| s.color.clone()),
+                    }));
+                }
+            }
+            let output = match (&g.mesh, pattern) {
+                (Some(m), true) => {
+                    let mut options = options;
+                    // The body is Y-up; "along" follows its bones.
+                    options.up = DVec3::Y;
+                    let centres: Vec<DVec3> = m
+                        .triangles()
+                        .iter()
+                        .map(|t| t.iter().map(|&i| m.positions()[i as usize]).sum::<DVec3>() / 3.0)
+                        .collect();
+                    options.along =
+                        Some(along_body(&b.joints, &centres).map_err(|e| e.to_string())?);
+                    options.ease_zones = zones.clone();
+                    options.materials = plan.clone();
+                    options.edges = g.edges.clone();
+                    Some(job::run(m, &g.seams, &options).map_err(|e| e.to_string())?)
+                }
+                (None, true) => {
+                    return Err("draw the garment's edges and click inside it first".into())
+                }
+                _ => None,
+            };
+            // Pressure on the cut body's vertices (0 off the garment).
+            let pressure = output.as_ref().map(|o| {
+                let mut p = vec![0.0f32; g.body.positions().len()];
+                for (&v, &x) in g.vertex_origin.iter().zip(&o.fit.pressure_mmhg) {
+                    p[v as usize] = x as f32;
+                }
+                p
+            });
+            let zone_json: Vec<Value> = zones
+                .iter()
+                .map(|z| json!({ "center": [z.center.x, z.center.y, z.center.z], "radius_mm": z.radius_mm, "ease": z.ease }))
+                .collect();
+            let mut warnings = g.warnings.clone();
+            warnings.append(&mut plan_warnings);
+            Ok(json!({
+                "ok": true,
+                "positions": flat3(g.body.positions().iter().copied()),
+                "triangles": g.body.triangles().iter().flatten().copied().collect::<Vec<u32>>(),
+                "garment_triangles": garment_triangles,
+                "curves": curves,
+                "warnings": warnings,
+                "panels": panels.as_ref().and_then(|p| p.as_ref().ok()),
+                "panel_error": panels.as_ref().and_then(|p| p.as_ref().err()),
+                "zones": zone_json,
+                "pieces": pieces,
+                "pressure": pressure,
+                "output": output,
             }))
         }
         Request::Calibrate { calibration } => {
@@ -240,6 +398,61 @@ mod tests {
             r#"{"command": "human", "body": {"measurements": {"elbow": 3}}}"#,
         ));
         assert_eq!(bad["ok"], false);
+    }
+
+    #[test]
+    fn garment_preview_and_pattern() {
+        let project: Value = serde_json::from_str(
+            &std::fs::read_to_string(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/data/top.project.json"
+            ))
+            .unwrap(),
+        )
+        .unwrap();
+        let req = |pattern: bool| {
+            json!({ "command": "garment", "body": project["body"], "design": project["garment"],
+                    "materials": project["materials"], "pattern": pattern,
+                    "options": { "print": { "paper": "letter" } } })
+            .to_string()
+        };
+        let preview = parse(&handle(&req(false)));
+        assert_eq!(preview["ok"], true, "{}", preview["error"]);
+        assert_eq!(preview["panels"], 2);
+        assert!(preview["panel_error"].is_null());
+        assert_eq!(preview["curves"].as_array().unwrap().len(), 8);
+        assert!(preview["output"].is_null());
+        // Two pieces, both on the first sheet of the catalogue.
+        let pieces = preview["pieces"].as_array().unwrap();
+        assert_eq!(pieces.len(), 2);
+        assert!(pieces
+            .iter()
+            .all(|p| p["sheet"] == "black 0.40" && p["color"] == "#151515"));
+        let n = preview["garment_triangles"].as_array().unwrap().len();
+        assert!(n > 0 && n.is_multiple_of(3));
+        let full = parse(&handle(&req(true)));
+        assert_eq!(full["output"]["panel_svgs"].as_array().unwrap().len(), 2);
+        // The example's finishes: a neckline trim and a step for each.
+        assert_eq!(full["output"]["report"]["trims"][0]["edge"], "neckline");
+        assert_eq!(full["output"]["trim_svgs"].as_array().unwrap().len(), 1);
+        let steps = full["output"]["report"]["assembly"].as_array().unwrap();
+        assert!(steps
+            .iter()
+            .any(|s| s.as_str().unwrap().starts_with("Hem the hem")));
+        assert!(full["output"]["pdf"]
+            .as_str()
+            .unwrap()
+            .contains("/MediaBox [0 0 612.00 792.00]"));
+        // Pressure on every body vertex; positive on the garment somewhere.
+        let p = full["pressure"].as_array().unwrap();
+        assert_eq!(p.len(), full["positions"].as_array().unwrap().len() / 3);
+        assert!(p.iter().any(|x| x.as_f64().unwrap() > 5.0));
+        assert!(
+            full["output"]["report"]["panels"][0]["p95_pressure_mmhg"]
+                .as_f64()
+                .unwrap()
+                > 0.0
+        );
     }
 
     #[test]

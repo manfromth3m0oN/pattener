@@ -9,12 +9,15 @@ use clap::{Parser, Subcommand, ValueEnum};
 use latexpat_core::arap::ArapOptions;
 use latexpat_core::body::{torso, BodyMeasurements, BodyOptions, SeamStyle};
 use latexpat_core::calibrate::{calibrate, Calibration, CalibrationResult, SheetFit};
+use latexpat_core::fitmap::Material;
+use latexpat_core::garment::{build, material_plan, zones_on};
 use latexpat_core::glam::DVec3;
-use latexpat_core::human::{fit, BodyModel, Measurer};
+use latexpat_core::human::{along_body, fit, BodyModel, Measurer};
 use latexpat_core::job::{self, EaseSpec, JobOptions, JobOutput, Report};
 use latexpat_core::nest::NestOptions;
 use latexpat_core::obj::{parse_obj, write_obj};
 use latexpat_core::pattern::PatternOptions;
+use latexpat_core::pdf::{Paper, PrintOptions};
 use latexpat_core::project::Project;
 use latexpat_core::seams::AllowanceSide;
 use latexpat_core::svg::HeatmapMetric;
@@ -94,10 +97,14 @@ struct CalibrateArgs {
 #[derive(clap::Args)]
 struct FlattenArgs {
     /// Triangle/polygon mesh in OBJ format (millimetres unless --scale is given).
-    mesh: PathBuf,
+    #[arg(required_unless_present = "project")]
+    mesh: Option<PathBuf>,
     /// Seam file: {"seams": [{"name": "...", "vertices": [0-based OBJ vertex indices]}]}.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "project")]
     seams: Option<PathBuf>,
+    /// Project file with a body and a garment drawn on it (instead of a mesh).
+    #[arg(long, conflicts_with = "mesh")]
+    project: Option<PathBuf>,
     /// Ease factor s: flat edge length = s × body edge length (default 0.85).
     #[arg(long, conflicts_with = "calibration")]
     ease: Option<f64>,
@@ -141,6 +148,13 @@ struct FlattenArgs {
     /// Warn when the two sides of a seam differ by more than this (mm).
     #[arg(long, default_value_t = 1.0)]
     seam_tolerance: f64,
+    /// Fraction of the reduction applied along the body (0–1): 1 reduces
+    /// length as much as girth; 0.3–0.5 is typical for latex.
+    #[arg(long, default_value_t = 1.0)]
+    length_relief: f64,
+    /// Latex thickness (mm) for the pressure map when no calibration is given.
+    #[arg(long, default_value_t = 0.4)]
+    thickness: f64,
     /// Glue overlap added to one side of each seam (mm).
     #[arg(long, default_value_t = 6.0)]
     glue_allowance: f64,
@@ -162,6 +176,18 @@ struct FlattenArgs {
     /// Do not rotate pieces by 90° when laying them out.
     #[arg(long)]
     no_rotate: bool,
+    /// Strip on each side of a zip seam for the zip tape (mm).
+    #[arg(long, default_value_t = 10.0)]
+    zip_allowance: f64,
+    /// Also write pattern.pdf: pieces at full size tiled over this paper.
+    #[arg(long, value_enum)]
+    pdf: Option<PaperArg>,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum PaperArg {
+    A4,
+    Letter,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -373,6 +399,7 @@ fn flatten(args: FlattenArgs) -> Result<()> {
     for (name, v) in [
         ("--glue-allowance", args.glue_allowance),
         ("--hem-allowance", args.hem_allowance),
+        ("--zip-allowance", args.zip_allowance),
         ("--notch-spacing", args.notch_spacing),
         ("--sheet-gap", args.sheet_gap),
     ] {
@@ -383,17 +410,84 @@ fn flatten(args: FlattenArgs) -> Result<()> {
     if !(args.heatmap_range > 1.0) {
         bail!("--heatmap-range must be greater than 1");
     }
-    let text = fs::read_to_string(&args.mesh)
-        .with_context(|| format!("reading {}", args.mesh.display()))?;
-    let mut mesh = parse_obj(&text).with_context(|| format!("loading {}", args.mesh.display()))?;
-    mesh.scale(args.scale);
-
-    let seams: SeamSet = match &args.seams {
-        Some(p) => {
-            let t = fs::read_to_string(p).with_context(|| format!("reading {}", p.display()))?;
-            serde_json::from_str(&t).with_context(|| format!("parsing {}", p.display()))?
+    let mut materials = None;
+    let (mesh, seams, source, up, along, zones, edges) = match (&args.project, &args.mesh) {
+        (Some(path), _) => {
+            let t =
+                fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+            let project: Project =
+                serde_json::from_str(&t).with_context(|| format!("parsing {}", path.display()))?;
+            let model = BodyModel::bundled();
+            let measurer = Measurer::new(&model)?;
+            let body = fit(
+                &model,
+                &measurer,
+                &project.body.measurements,
+                &project.body.shape,
+            )?;
+            let g = build(&body.mesh, &project.garment)?;
+            for w in &g.warnings {
+                eprintln!("warning: {w}");
+            }
+            // Sheets from the project's catalogue, by the design's assignments.
+            let (plan, plan_warnings) =
+                material_plan(&body.mesh, &g, &project.garment, &project.materials)?;
+            for w in &plan_warnings {
+                eprintln!("warning: {w}");
+            }
+            materials = plan;
+            let mesh = g.mesh.with_context(|| {
+                "the project's garment has no area yet: draw its edges and pick a point inside"
+            })?;
+            // Along the body: from the skeleton, at each triangle's centre.
+            let centres: Vec<DVec3> = mesh
+                .triangles()
+                .iter()
+                .map(|t| {
+                    t.iter()
+                        .map(|&i| mesh.positions()[i as usize])
+                        .sum::<DVec3>()
+                        / 3.0
+                })
+                .collect();
+            let along = along_body(&body.joints, &centres)?;
+            let zones = zones_on(&body.mesh, &project.garment)?;
+            // The body model is Y-up.
+            (
+                mesh,
+                g.seams,
+                path.display().to_string(),
+                DVec3::Y,
+                Some(along),
+                zones,
+                g.edges,
+            )
         }
-        None => SeamSet::default(),
+        (None, Some(path)) => {
+            let text =
+                fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+            let mut mesh =
+                parse_obj(&text).with_context(|| format!("loading {}", path.display()))?;
+            mesh.scale(args.scale);
+            let seams: SeamSet = match &args.seams {
+                Some(p) => {
+                    let t = fs::read_to_string(p)
+                        .with_context(|| format!("reading {}", p.display()))?;
+                    serde_json::from_str(&t).with_context(|| format!("parsing {}", p.display()))?
+                }
+                None => SeamSet::default(),
+            };
+            (
+                mesh,
+                seams,
+                path.display().to_string(),
+                args.up.vec(),
+                None,
+                Vec::new(),
+                Vec::new(),
+            )
+        }
+        (None, None) => unreachable!("clap requires a mesh or a project"),
     };
 
     let ease = match &args.calibration {
@@ -427,7 +521,7 @@ fn flatten(args: FlattenArgs) -> Result<()> {
             max_iterations: args.max_iterations,
             tolerance: args.tolerance,
         },
-        up: args.up.vec(),
+        up,
         seam_matching: (!args.no_seam_matching).then_some(SeamMatching {
             weight: args.seam_weight,
             ..Default::default()
@@ -438,6 +532,7 @@ fn flatten(args: FlattenArgs) -> Result<()> {
             allowance_side: args.allowance_side.into(),
             hem_allowance: args.hem_allowance,
             notch_spacing: (args.notch_spacing > 0.0).then_some(args.notch_spacing),
+            zip_allowance: args.zip_allowance,
         },
         heatmap: match args.heatmap {
             Heatmap::None => None,
@@ -445,19 +540,30 @@ fn flatten(args: FlattenArgs) -> Result<()> {
             Heatmap::Area => Some(HeatmapMetric::AreaStretch),
         },
         heatmap_range: args.heatmap_range,
+        length_relief: args.length_relief,
+        along,
+        ease_zones: zones,
+        materials,
+        material: Material {
+            thickness_mm: args.thickness,
+            ..Default::default()
+        },
         sheet: args.sheet_width.map(|w| NestOptions {
             sheet_width: w,
             gap: args.sheet_gap,
             allow_rotation: !args.no_rotate,
         }),
+        edges,
+        print: args.pdf.map(|p| PrintOptions {
+            paper: match p {
+                PaperArg::A4 => Paper::A4,
+                PaperArg::Letter => Paper::Letter,
+            },
+            ..Default::default()
+        }),
     };
     let out = job::run(&mesh, &seams, &opts)?;
-    write_job(
-        &args.output,
-        &args.mesh.display().to_string(),
-        args.scale,
-        &out,
-    )
+    write_job(&args.output, &source, args.scale, &out)
 }
 
 /// Write a job's files and print its summary tables and warnings.
@@ -465,19 +571,35 @@ fn write_job(dir: &Path, mesh: &str, scale: f64, out: &JobOutput) -> Result<()> 
     fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
     let r = &out.report;
     println!(
-        "{:<10} {:>6} {:>6} {:>9} {:>9} {:>9} {:>17}  seams",
-        "panel", "tris", "ease", "min σ", "max σ", "area ×", "size (mm)"
+        "{:<10} {:>6} {:>6} {:>9} {:>9} {:>9} {:>9} {:>7} {:>8} {:>8} {:>7} {:>17}  seams",
+        "panel",
+        "tris",
+        "ease",
+        "min σ",
+        "p95 σ",
+        "max σ",
+        "area ×",
+        "slack",
+        "mmHg",
+        "p95 mmHg",
+        "bridge",
+        "size (mm)"
     );
     for (p, svg) in r.panels.iter().zip(&out.panel_svgs) {
         write(&dir.join(&p.file), svg)?;
         println!(
-            "{:<10} {:>6} {:>6.3} {:>9.4} {:>9.4} {:>9.4} {:>8.1} × {:<6.1}  {}",
+            "{:<10} {:>6} {:>6.3} {:>9.4} {:>9.4} {:>9.4} {:>9.4} {:>6.1}% {:>8.1} {:>8.1} {:>6.1}% {:>8.1} × {:<6.1}  {}",
             p.index,
             p.triangles,
             p.ease,
             p.min_stretch,
+            p.p95_stretch,
             p.max_stretch,
             p.mean_area_stretch,
+            100.0 * p.slack_fraction,
+            p.mean_pressure_mmhg,
+            p.p95_pressure_mmhg,
+            100.0 * p.bridging_fraction,
             p.flat_width_mm,
             p.flat_height_mm,
             p.seams.join(", ")
@@ -512,6 +634,53 @@ fn write_job(dir: &Path, mesh: &str, scale: f64, out: &JobOutput) -> Result<()> 
             100.0 * l.utilisation,
             l.file
         );
+    }
+    if !r.materials.is_empty() {
+        println!();
+        println!(
+            "{:<20} {:>6} {:>8} {:>11} {:>9} {:>6} {:>8}  pieces",
+            "sheet", "t (mm)", "roll", "length (m)", "area m²", "used", "cost"
+        );
+    }
+    for (u, svg) in r.materials.iter().zip(&out.material_layouts) {
+        write(&dir.join(&u.file), svg)?;
+        println!(
+            "{:<20} {:>6.2} {:>8.0} {:>11.2} {:>9.3} {:>5.0}% {:>8}  {:?} → {}",
+            u.sheet,
+            u.thickness_mm,
+            u.roll_width_mm,
+            u.length_mm / 1000.0,
+            u.pieces_area_m2,
+            100.0 * u.utilisation,
+            u.cost
+                .map(|c| format!("{c:.2}"))
+                .unwrap_or_else(|| "-".into()),
+            u.pieces,
+            u.file
+        );
+    }
+    for (k, (t, svg)) in r.trims.iter().zip(&out.trim_svgs).enumerate() {
+        if k == 0 {
+            println!();
+        }
+        let file = format!("trim_{k:02}.svg");
+        write(&dir.join(&file), svg)?;
+        println!(
+            "trim for {}: {:.0} × {:.0} mm (edge {:.0} mm) → {file}",
+            t.edge, t.length_mm, t.width_mm, t.edge_length_mm
+        );
+    }
+    if !r.assembly.is_empty() {
+        println!();
+        println!("assembly:");
+        for (k, step) in r.assembly.iter().enumerate() {
+            println!("{:>3}. {step}", k + 1);
+        }
+    }
+    if let Some(pdf) = &out.pdf {
+        write(&dir.join("pattern.pdf"), pdf)?;
+        println!();
+        println!("print: pattern.pdf (print at 100 %, check the 50 mm square)");
     }
     for w in &out.warnings {
         eprintln!("warning: {w}");

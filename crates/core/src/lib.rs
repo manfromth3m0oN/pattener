@@ -28,21 +28,26 @@
 
 pub mod allowance;
 pub mod arap;
+pub mod assembly;
 pub mod body;
 pub mod calibrate;
 pub mod cut;
 pub mod ease;
 pub mod error;
+pub mod fitmap;
 pub mod flatten;
+pub mod garment;
 pub mod human;
 pub mod job;
 pub mod linalg;
 pub mod lscm;
+pub mod materials;
 pub mod mesh;
 pub mod nest;
 pub mod obj;
 pub mod panel;
 pub mod pattern;
+pub mod pdf;
 pub mod project;
 pub mod seam_match;
 pub mod seams;

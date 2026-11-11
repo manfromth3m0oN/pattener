@@ -157,10 +157,11 @@ pub fn panel_svg(fp: &FlatPanel, piece: &PatternPiece, opts: &SvgOptions) -> Str
     let r = &fp.strain;
     let _ = writeln!(
         s,
-        r#"<text x="{:.3}" y="{ty:.3}">stretch {:.3}–{:.3}, mean area ×{:.3}{}</text>"#,
+        r#"<text x="{:.3}" y="{ty:.3}">stretch {:.3}–{:.3} (95 % under {:.3}), mean area ×{:.3}{}</text>"#,
         lo.x - m + 2.0,
         r.min_stretch,
         r.max_stretch,
+        r.p95_stretch,
         r.mean_area_stretch,
         if r.flipped.is_empty() {
             String::new()
@@ -293,6 +294,55 @@ pub fn panel_svg(fp: &FlatPanel, piece: &PatternPiece, opts: &SvgOptions) -> Str
             metric.label()
         );
     }
+    let _ = writeln!(s, "</svg>");
+    s
+}
+
+/// Render a trim strip at 1:1: its outline, with marks at each quarter of
+/// its length to spread it evenly along the edge it finishes.
+pub fn trim_svg(t: &crate::pattern::TrimStrip) -> String {
+    let m = 10.0;
+    let header = 12.0;
+    let (l, w) = (t.length_mm, t.width_mm);
+    let (vw, vh) = (l + 2.0 * m, w + 2.0 * m + header + 10.0);
+    let mut s = String::new();
+    let _ = writeln!(s, r#"<?xml version="1.0" encoding="UTF-8"?>"#);
+    let _ = writeln!(
+        s,
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{vw:.3}mm" height="{vh:.3}mm" viewBox="{:.3} {:.3} {vw:.3} {vh:.3}">"#,
+        -m,
+        -m - header
+    );
+    let _ = writeln!(
+        s,
+        r#"<text x="0" y="{:.3}" font-family="sans-serif" font-size="5">trim: {} edge, {:.0} × {:.0} mm (edge {:.0} mm)</text>"#,
+        -header + 1.0,
+        escape(&t.edge),
+        l,
+        w,
+        t.edge_length_mm
+    );
+    let _ = writeln!(
+        s,
+        r#"<path id="cut-line" d="M0 0H{l:.3}V{w:.3}H0Z" fill="none" stroke="black" stroke-width="0.3"/>"#
+    );
+    let _ = writeln!(
+        s,
+        r#"<g id="quarter-marks" stroke="black" stroke-width="0.3">"#
+    );
+    for k in 1..4 {
+        let x = l * k as f64 / 4.0;
+        let _ = writeln!(s, r#"<path d="M{x:.3} 0V3M{x:.3} {:.3}V{w:.3}"/>"#, w - 3.0);
+    }
+    let _ = writeln!(s, "</g>");
+    let fy = w + m + 4.0;
+    let _ = writeln!(
+        s,
+        r#"<g stroke="black" stroke-width="0.3"><path d="M0 {:.3}V{fy:.3}H50V{:.3}" fill="none"/></g><text x="0" y="{:.3}" font-family="sans-serif" font-size="3">50 mm</text>"#,
+        fy - 1.5,
+        fy - 1.5,
+        fy + 4.0
+    );
     let _ = writeln!(s, "</svg>");
     s
 }
