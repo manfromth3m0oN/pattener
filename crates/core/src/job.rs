@@ -10,8 +10,9 @@
 use crate::arap::ArapOptions;
 use crate::calibrate::{calibrate, Calibration, CalibrationResult};
 use crate::cut::cut_panels;
-use crate::ease::Ease;
+use crate::ease::{apply_zones, Ease, EaseZone};
 use crate::error::{Error, Result};
+use crate::fitmap::{pressure_map, FitMap, Material};
 use crate::flatten::{flatten_garment, FlatPanel, FlattenOptions, SeamMatching, SeamReport};
 use crate::mesh::Mesh;
 use crate::nest::{nest, NestOptions, Placement};
@@ -19,6 +20,10 @@ use crate::pattern::{build_pattern, PatternOptions};
 use crate::seams::SeamSet;
 use crate::svg::{layout_svg, panel_svg, EdgeLabel, HeatmapMetric, SvgOptions};
 use glam::{DVec2, DVec3};
+
+/// Pressure (mmHg) above which 5 % of a piece triggers a warning: the
+/// start of the strongest medical compression class (about 34–46 mmHg).
+const HIGH_PRESSURE_MMHG: f64 = 40.0;
 
 /// How the ease is chosen.
 #[derive(Debug, Clone, PartialEq)]
@@ -63,6 +68,10 @@ pub struct JobOptions {
     /// body, e.g. from its bones); `None` uses `up`.
     #[cfg_attr(feature = "serde", serde(skip))]
     pub along: Option<Vec<DVec3>>,
+    /// Regions with their own ease (see [`EaseZone`]).
+    pub ease_zones: Vec<EaseZone>,
+    /// Latex used for the pressure map when no calibration is given.
+    pub material: Material,
 }
 
 impl Default for JobOptions {
@@ -79,6 +88,8 @@ impl Default for JobOptions {
             sheet: None,
             length_relief: 1.0,
             along: None,
+            ease_zones: Vec::new(),
+            material: Material::default(),
         }
     }
 }
@@ -100,6 +111,12 @@ pub struct PanelReport {
     pub p95_stretch: f64,
     /// Fraction of the piece's area that is slack in some direction.
     pub slack_fraction: f64,
+    /// Mean pressure on the body (mmHg).
+    pub mean_pressure_mmhg: f64,
+    /// 95 % of the piece's area presses less than this (mmHg).
+    pub p95_pressure_mmhg: f64,
+    /// Fraction of the piece's area that bridges over a hollow.
+    pub bridging_fraction: f64,
     pub mean_area_stretch: f64,
     pub body_area_mm2: f64,
     pub flat_area_mm2: f64,
@@ -159,6 +176,8 @@ pub struct JobOutput {
     pub layout_svg: Option<String>,
     /// Human-readable warnings.
     pub warnings: Vec<String>,
+    /// Pressure and bridging map on the input mesh.
+    pub fit: FitMap,
 }
 
 /// Run a complete pattern job.
@@ -220,6 +239,16 @@ pub fn run(mesh: &Mesh, seams: &SeamSet, opts: &JobOptions) -> Result<JobOutput>
         }
     };
 
+    let ease = if opts.ease_zones.is_empty() {
+        ease
+    } else {
+        apply_zones(mesh, &ease, &opts.ease_zones)?
+    };
+    // Membrane stiffness per panel for the pressure map.
+    let pressure_k: Vec<f64> = stiffness
+        .clone()
+        .unwrap_or_else(|| vec![opts.material.stiffness(); n_panels]);
+
     let fopts = FlattenOptions {
         ease,
         arap: opts.arap,
@@ -230,6 +259,7 @@ pub fn run(mesh: &Mesh, seams: &SeamSet, opts: &JobOptions) -> Result<JobOutput>
         along: opts.along.clone(),
     };
     let garment = flatten_garment(mesh, seams, &fopts)?;
+    let fit = pressure_map(mesh, &garment, &pressure_k);
     let pieces = build_pattern(&garment, seams, &opts.pattern);
 
     let mut report = Report {
@@ -270,6 +300,14 @@ pub fn run(mesh: &Mesh, seams: &SeamSet, opts: &JobOptions) -> Result<JobOutput>
                  (an edge curves inwards more tightly than the allowance); check the SVG"
             ));
         }
+        let pf = fit.panels[i];
+        if pf.p95_pressure_mmhg > HIGH_PRESSURE_MMHG {
+            warnings.push(format!(
+                "panel {i} presses hard: 5 % of it exceeds {:.0} mmHg; loosen the ease there (an ease zone) \
+                 or use thinner latex",
+                pf.p95_pressure_mmhg
+            ));
+        }
         if !s.flipped.is_empty() {
             warnings.push(format!(
                 "panel {i} has {} flipped triangle(s) in the flat layout",
@@ -288,6 +326,9 @@ pub fn run(mesh: &Mesh, seams: &SeamSet, opts: &JobOptions) -> Result<JobOutput>
             max_stretch: s.max_stretch,
             p95_stretch: s.p95_stretch,
             slack_fraction: s.slack_fraction,
+            mean_pressure_mmhg: pf.mean_pressure_mmhg,
+            p95_pressure_mmhg: pf.p95_pressure_mmhg,
+            bridging_fraction: pf.bridging_fraction,
             mean_area_stretch: s.mean_area_stretch,
             body_area_mm2: s.body_area,
             flat_area_mm2: s.flat_area,
@@ -345,6 +386,7 @@ pub fn run(mesh: &Mesh, seams: &SeamSet, opts: &JobOptions) -> Result<JobOutput>
         panel_svgs,
         layout_svg: layout,
         warnings,
+        fit,
     })
 }
 

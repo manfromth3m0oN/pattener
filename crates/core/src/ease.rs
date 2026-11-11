@@ -87,6 +87,66 @@ impl Ease {
     }
 }
 
+/// A region of the body with its own ease: within `radius_mm / 2` of
+/// `center` the ease is `ease`; between `radius_mm / 2` and `radius_mm` it
+/// blends back to the surrounding value with a cosine ramp
+/// `w = ½ (1 + cos(π (d − R/2) / (R/2)))`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct EaseZone {
+    pub center: DVec3,
+    pub radius_mm: f64,
+    pub ease: f64,
+}
+
+impl EaseZone {
+    /// Blend weight at distance `d` from the centre.
+    pub fn weight(&self, d: f64) -> f64 {
+        let half = 0.5 * self.radius_mm;
+        if d <= half {
+            1.0
+        } else if d >= self.radius_mm {
+            0.0
+        } else {
+            0.5 * (1.0 + (std::f64::consts::PI * (d - half) / half).cos())
+        }
+    }
+}
+
+/// Apply ease zones (in order) to `base`, giving one value per mesh
+/// triangle (blended at each triangle's centre).
+pub fn apply_zones(mesh: &Mesh, base: &Ease, zones: &[EaseZone]) -> Result<Ease> {
+    let n = mesh.triangles().len();
+    let mut values = match base {
+        Ease::Uniform(s) => vec![*s; n],
+        Ease::PerTriangle(v) if v.len() == n => v.clone(),
+        Ease::PerTriangle(v) => {
+            return Err(Error::InvalidEase(format!(
+                "{} ease values for {n} triangles",
+                v.len()
+            )));
+        }
+    };
+    for z in zones {
+        if !(z.radius_mm > 0.0 && z.ease > 0.0 && z.ease.is_finite()) {
+            return Err(Error::InvalidEase(format!(
+                "an ease zone needs a positive radius and ease, got {} mm and {}",
+                z.radius_mm, z.ease
+            )));
+        }
+        for (t, s) in mesh.triangles().iter().zip(values.iter_mut()) {
+            let c = t
+                .iter()
+                .map(|&i| mesh.positions()[i as usize])
+                .sum::<DVec3>()
+                / 3.0;
+            let w = z.weight(c.distance(z.center));
+            *s += w * (z.ease - *s);
+        }
+    }
+    Ok(Ease::PerTriangle(values))
+}
+
 /// Reference (target) flat shapes of a panel's triangles for ARAP.
 ///
 /// Each 3D triangle is laid flat isometrically in its own frame (`e₁` along
@@ -138,6 +198,31 @@ mod tests {
     use super::*;
     use crate::{flatten_garment, testmesh, FlattenOptions, Seam};
     use approx::assert_relative_eq;
+
+    #[test]
+    fn zones_blend_smoothly() {
+        let m = testmesh::grid(20, 2, 10.0);
+        let z = EaseZone {
+            center: DVec3::new(0.0, 10.0, 0.0),
+            radius_mm: 100.0,
+            ease: 0.95,
+        };
+        assert_eq!(z.weight(10.0), 1.0);
+        assert_relative_eq!(z.weight(75.0), 0.5, epsilon = 1e-12);
+        assert_eq!(z.weight(150.0), 0.0);
+        let Ease::PerTriangle(v) = apply_zones(&m, &Ease::Uniform(0.85), &[z]).unwrap() else {
+            panic!()
+        };
+        // Near the centre: the zone's ease; far away: the base.
+        assert_relative_eq!(v[0], 0.95, epsilon = 1e-12);
+        assert_relative_eq!(*v.last().unwrap(), 0.85, epsilon = 1e-12);
+        assert!(v.iter().all(|&s| (0.85..=0.95).contains(&s)));
+        let bad = EaseZone {
+            radius_mm: 0.0,
+            ..z
+        };
+        assert!(apply_zones(&m, &Ease::Uniform(0.85), &[bad]).is_err());
+    }
 
     #[test]
     fn per_panel_ease_scales_each_panel() {

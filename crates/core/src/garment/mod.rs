@@ -100,7 +100,22 @@ pub struct Curve {
     pub mirror: bool,
 }
 
-/// A garment: curves and a point inside it.
+/// A region of the body with its own ease (see
+/// [`EaseZone`](crate::ease::EaseZone)), placed on the body model.
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct DesignZone {
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub name: String,
+    pub center: SurfacePoint,
+    pub radius_mm: f64,
+    pub ease: f64,
+    /// Also apply it at the mirror image on the other side of the body.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub mirror: bool,
+}
+
+/// A garment: curves, a point inside it, and ease zones.
 #[derive(Debug, Clone, PartialEq, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(default))]
@@ -108,6 +123,33 @@ pub struct GarmentDesign {
     pub curves: Vec<Curve>,
     /// A point on the body inside the garment.
     pub inside: Option<SurfacePoint>,
+    pub zones: Vec<DesignZone>,
+}
+
+/// The design's ease zones placed on `body` (which has the body model's
+/// triangles), including mirror images.
+pub fn zones_on(body: &Mesh, design: &GarmentDesign) -> Result<Vec<crate::ease::EaseZone>> {
+    let (pos, tri) = (body.positions(), body.triangles());
+    let mut out = Vec::new();
+    for z in &design.zones {
+        let c = z
+            .center
+            .position(pos, tri)
+            .ok_or_else(|| Error::Garment(format!("ease zone '{}' is off the body", z.name)))?;
+        out.push(crate::ease::EaseZone {
+            center: c,
+            radius_mm: z.radius_mm,
+            ease: z.ease,
+        });
+        if z.mirror {
+            out.push(crate::ease::EaseZone {
+                center: DVec3::new(-c.x, c.y, c.z),
+                radius_mm: z.radius_mm,
+                ease: z.ease,
+            });
+        }
+    }
+    Ok(out)
 }
 
 /// One embedded curve.
@@ -713,6 +755,7 @@ enum Step {
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use super::edit::locate;
     use super::examples::top;
     use super::*;
     use crate::human::{fit, test_model, MeasureKind, Measurements, Measurer, ShapeOptions};
@@ -824,6 +867,62 @@ pub(crate) mod tests {
             "{:?}",
             out.warnings
         );
+    }
+
+    #[test]
+    fn pressure_map_and_ease_zone_on_the_top() {
+        let (mesh, tapes) = body();
+        let mut design = top(&mesh, &tapes);
+        let g = build(&mesh, &design).unwrap();
+        let gm = g.mesh.as_ref().unwrap();
+        let plain = run(gm, &g.seams, &JobOptions::default()).unwrap();
+        assert_eq!(plain.fit.pressure_mmhg.len(), gm.positions().len());
+        for p in &plain.report.panels {
+            // Ease 0.85 on a torso: light compression on average, with a
+            // little bridging (e.g. between the breasts, small of the back).
+            assert!(
+                (2.0..20.0).contains(&p.mean_pressure_mmhg),
+                "{}",
+                p.mean_pressure_mmhg
+            );
+            assert!(p.p95_pressure_mmhg < 40.0, "{}", p.p95_pressure_mmhg);
+            assert!(p.bridging_fraction < 0.25, "{}", p.bridging_fraction);
+        }
+        assert!(!plain.warnings.iter().any(|w| w.contains("presses hard")));
+
+        // A looser zone over the front of the waist lowers the front's pressure.
+        let waist_front = extreme(tape(&tapes, MeasureKind::Waist), |p| p.z);
+        design.zones.push(DesignZone {
+            name: "waist".into(),
+            center: locate(mesh.positions(), mesh.triangles(), waist_front),
+            radius_mm: 200.0,
+            ease: 0.97,
+            mirror: false,
+        });
+        let zones = zones_on(&mesh, &design).unwrap();
+        let loose = run(
+            gm,
+            &g.seams,
+            &JobOptions {
+                ease_zones: zones,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        // Near the zone's centre the latex is barely stretched (1/0.97
+        // instead of 1/0.85), so it presses far less.
+        let near = |out: &crate::job::JobOutput| {
+            let v: Vec<f64> = gm
+                .positions()
+                .iter()
+                .zip(&out.fit.pressure_mmhg)
+                .filter(|(p, _)| p.distance(waist_front) < 60.0)
+                .map(|(_, &x)| x)
+                .collect();
+            v.iter().sum::<f64>() / v.len() as f64
+        };
+        let (before, after) = (near(&plain), near(&loose));
+        assert!(after < 0.5 * before, "{before} -> {after}");
     }
 
     #[test]

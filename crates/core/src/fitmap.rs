@@ -25,8 +25,13 @@
 //! `FᵀF = V Λ Vᵀ`, the body directions are `uᵢ = F vᵢ / λᵢ`.
 //!
 //! ## Curvature
-//! Vertex normals `n_j` (area-weighted) are interpolated linearly over each
-//! triangle; the normal curvature along a unit tangent `u` is
+//! Latex bridges bumps much smaller than a few centimetres instead of
+//! following them, so curvature is measured at that scale: area-weighted
+//! vertex normals are smoothed by [`NORMAL_SMOOTHING`] rounds of averaging
+//! with their neighbours (on the 10–15 mm body mesh, a scale of about
+//! 4–6 cm). Without this, small sharp details of the body mesh (nipples,
+//! the navel) show hundreds of mmHg over a few square millimetres. The
+//! smoothed normals `n_j` are interpolated linearly over each triangle; the normal curvature along a unit tangent `u` is
 //! `κ(u) = u · (∂n/∂u) = u · Σ_j n_j (∇φ_j · u)` with the barycentric
 //! gradients `∇φ_j = N × (x_k − x_i) / (2A)` (`(i, j, k)` cyclic, `N` the
 //! unit face normal). Outward normals make convex body parts positive.
@@ -103,7 +108,10 @@ pub fn tensions(k: f64, l1: f64, l2: f64) -> (f64, f64) {
     (t(l1), t(l2))
 }
 
-/// Area-weighted vertex normals.
+/// Rounds of neighbour averaging applied to the vertex normals.
+pub const NORMAL_SMOOTHING: usize = 3;
+
+/// Area-weighted vertex normals, smoothed over their neighbours.
 fn vertex_normals(mesh: &Mesh) -> Vec<DVec3> {
     let mut n = vec![DVec3::ZERO; mesh.positions().len()];
     for t in mesh.triangles() {
@@ -113,7 +121,17 @@ fn vertex_normals(mesh: &Mesh) -> Vec<DVec3> {
             n[i as usize] += f;
         }
     }
-    n.into_iter().map(|v| v.normalize_or_zero()).collect()
+    let mut n: Vec<DVec3> = n.into_iter().map(|v| v.normalize_or_zero()).collect();
+    for _ in 0..NORMAL_SMOOTHING {
+        let mut sum = n.clone();
+        for e in mesh.edges() {
+            let (a, b) = (e.v[0] as usize, e.v[1] as usize);
+            sum[a] += n[b];
+            sum[b] += n[a];
+        }
+        n = sum.into_iter().map(|v| v.normalize_or_zero()).collect();
+    }
+    n
 }
 
 /// Normal curvature of triangle `t` along unit tangent `u`.
@@ -280,14 +298,15 @@ mod tests {
         let k = Material::default().stiffness();
         let map = pressure_map(&m, &g, &[k]);
         // Stretch 1/s both ways: T = k (λ² − λ⁻⁴)/λ² around, κ = 1/R around
-        // and 0 along; the polygon of 48 sides has κ = 1/R exactly.
+        // and 0 along; the polygon of 48 sides has κ = 1/R (up to the
+        // normal smoothing at the open ends).
         let l = 1.0 / s;
         let (t, _) = tensions(k, l, l);
         let expected = t / 60.0 * MMHG_PER_N_MM2;
         // About 14 mmHg on a 60 mm radius: light compression.
         assert!((10.0..20.0).contains(&expected), "{expected}");
         for &p in &map.triangle_pressure_mmhg {
-            assert_relative_eq!(p, expected, max_relative = 1e-3);
+            assert_relative_eq!(p, expected, max_relative = 1e-2);
         }
         assert_relative_eq!(
             map.panels[0].mean_pressure_mmhg,

@@ -9,7 +9,8 @@ use clap::{Parser, Subcommand, ValueEnum};
 use latexpat_core::arap::ArapOptions;
 use latexpat_core::body::{torso, BodyMeasurements, BodyOptions, SeamStyle};
 use latexpat_core::calibrate::{calibrate, Calibration, CalibrationResult, SheetFit};
-use latexpat_core::garment::build;
+use latexpat_core::fitmap::Material;
+use latexpat_core::garment::{build, zones_on};
 use latexpat_core::glam::DVec3;
 use latexpat_core::human::{along_body, fit, BodyModel, Measurer};
 use latexpat_core::job::{self, EaseSpec, JobOptions, JobOutput, Report};
@@ -150,6 +151,9 @@ struct FlattenArgs {
     /// length as much as girth; 0.3–0.5 is typical for latex.
     #[arg(long, default_value_t = 1.0)]
     length_relief: f64,
+    /// Latex thickness (mm) for the pressure map when no calibration is given.
+    #[arg(long, default_value_t = 0.4)]
+    thickness: f64,
     /// Glue overlap added to one side of each seam (mm).
     #[arg(long, default_value_t = 6.0)]
     glue_allowance: f64,
@@ -392,7 +396,7 @@ fn flatten(args: FlattenArgs) -> Result<()> {
     if !(args.heatmap_range > 1.0) {
         bail!("--heatmap-range must be greater than 1");
     }
-    let (mesh, seams, source, up, along) = match (&args.project, &args.mesh) {
+    let (mesh, seams, source, up, along, zones) = match (&args.project, &args.mesh) {
         (Some(path), _) => {
             let t =
                 fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
@@ -425,6 +429,7 @@ fn flatten(args: FlattenArgs) -> Result<()> {
                 })
                 .collect();
             let along = along_body(&body.joints, &centres)?;
+            let zones = zones_on(&body.mesh, &project.garment)?;
             // The body model is Y-up.
             (
                 mesh,
@@ -432,6 +437,7 @@ fn flatten(args: FlattenArgs) -> Result<()> {
                 path.display().to_string(),
                 DVec3::Y,
                 Some(along),
+                zones,
             )
         }
         (None, Some(path)) => {
@@ -448,7 +454,14 @@ fn flatten(args: FlattenArgs) -> Result<()> {
                 }
                 None => SeamSet::default(),
             };
-            (mesh, seams, path.display().to_string(), args.up.vec(), None)
+            (
+                mesh,
+                seams,
+                path.display().to_string(),
+                args.up.vec(),
+                None,
+                Vec::new(),
+            )
         }
         (None, None) => unreachable!("clap requires a mesh or a project"),
     };
@@ -504,6 +517,11 @@ fn flatten(args: FlattenArgs) -> Result<()> {
         heatmap_range: args.heatmap_range,
         length_relief: args.length_relief,
         along,
+        ease_zones: zones,
+        material: Material {
+            thickness_mm: args.thickness,
+            ..Default::default()
+        },
         sheet: args.sheet_width.map(|w| NestOptions {
             sheet_width: w,
             gap: args.sheet_gap,
@@ -519,13 +537,24 @@ fn write_job(dir: &Path, mesh: &str, scale: f64, out: &JobOutput) -> Result<()> 
     fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
     let r = &out.report;
     println!(
-        "{:<10} {:>6} {:>6} {:>9} {:>9} {:>9} {:>9} {:>7} {:>17}  seams",
-        "panel", "tris", "ease", "min σ", "p95 σ", "max σ", "area ×", "slack", "size (mm)"
+        "{:<10} {:>6} {:>6} {:>9} {:>9} {:>9} {:>9} {:>7} {:>8} {:>8} {:>7} {:>17}  seams",
+        "panel",
+        "tris",
+        "ease",
+        "min σ",
+        "p95 σ",
+        "max σ",
+        "area ×",
+        "slack",
+        "mmHg",
+        "p95 mmHg",
+        "bridge",
+        "size (mm)"
     );
     for (p, svg) in r.panels.iter().zip(&out.panel_svgs) {
         write(&dir.join(&p.file), svg)?;
         println!(
-            "{:<10} {:>6} {:>6.3} {:>9.4} {:>9.4} {:>9.4} {:>9.4} {:>6.1}% {:>8.1} × {:<6.1}  {}",
+            "{:<10} {:>6} {:>6.3} {:>9.4} {:>9.4} {:>9.4} {:>9.4} {:>6.1}% {:>8.1} {:>8.1} {:>6.1}% {:>8.1} × {:<6.1}  {}",
             p.index,
             p.triangles,
             p.ease,
@@ -534,6 +563,9 @@ fn write_job(dir: &Path, mesh: &str, scale: f64, out: &JobOutput) -> Result<()> 
             p.max_stretch,
             p.mean_area_stretch,
             100.0 * p.slack_fraction,
+            p.mean_pressure_mmhg,
+            p.p95_pressure_mmhg,
+            100.0 * p.bridging_fraction,
             p.flat_width_mm,
             p.flat_height_mm,
             p.seams.join(", ")
