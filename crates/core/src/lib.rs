@@ -28,6 +28,7 @@
 
 pub mod allowance;
 pub mod arap;
+pub mod assembly;
 pub mod body;
 pub mod calibrate;
 pub mod cut;
@@ -46,6 +47,7 @@ pub mod nest;
 pub mod obj;
 pub mod panel;
 pub mod pattern;
+pub mod pdf;
 pub mod project;
 pub mod seam_match;
 pub mod seams;

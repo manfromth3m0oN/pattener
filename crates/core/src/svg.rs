@@ -298,6 +298,55 @@ pub fn panel_svg(fp: &FlatPanel, piece: &PatternPiece, opts: &SvgOptions) -> Str
     s
 }
 
+/// Render a trim strip at 1:1: its outline, with marks at each quarter of
+/// its length to spread it evenly along the edge it finishes.
+pub fn trim_svg(t: &crate::pattern::TrimStrip) -> String {
+    let m = 10.0;
+    let header = 12.0;
+    let (l, w) = (t.length_mm, t.width_mm);
+    let (vw, vh) = (l + 2.0 * m, w + 2.0 * m + header + 10.0);
+    let mut s = String::new();
+    let _ = writeln!(s, r#"<?xml version="1.0" encoding="UTF-8"?>"#);
+    let _ = writeln!(
+        s,
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{vw:.3}mm" height="{vh:.3}mm" viewBox="{:.3} {:.3} {vw:.3} {vh:.3}">"#,
+        -m,
+        -m - header
+    );
+    let _ = writeln!(
+        s,
+        r#"<text x="0" y="{:.3}" font-family="sans-serif" font-size="5">trim: {} edge, {:.0} × {:.0} mm (edge {:.0} mm)</text>"#,
+        -header + 1.0,
+        escape(&t.edge),
+        l,
+        w,
+        t.edge_length_mm
+    );
+    let _ = writeln!(
+        s,
+        r#"<path id="cut-line" d="M0 0H{l:.3}V{w:.3}H0Z" fill="none" stroke="black" stroke-width="0.3"/>"#
+    );
+    let _ = writeln!(
+        s,
+        r#"<g id="quarter-marks" stroke="black" stroke-width="0.3">"#
+    );
+    for k in 1..4 {
+        let x = l * k as f64 / 4.0;
+        let _ = writeln!(s, r#"<path d="M{x:.3} 0V3M{x:.3} {:.3}V{w:.3}"/>"#, w - 3.0);
+    }
+    let _ = writeln!(s, "</g>");
+    let fy = w + m + 4.0;
+    let _ = writeln!(
+        s,
+        r#"<g stroke="black" stroke-width="0.3"><path d="M0 {:.3}V{fy:.3}H50V{:.3}" fill="none"/></g><text x="0" y="{:.3}" font-family="sans-serif" font-size="3">50 mm</text>"#,
+        fy - 1.5,
+        fy - 1.5,
+        fy + 4.0
+    );
+    let _ = writeln!(s, "</svg>");
+    s
+}
+
 /// Render a sheet layout: every piece's cut line at its placement, the
 /// sheet edges, and the length used. 1:1 scale in mm; `y` runs along the
 /// roll (down the page), pieces keep the outside-facing orientation of the

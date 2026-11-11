@@ -362,3 +362,30 @@ fn project_materials_give_a_layout_per_sheet() {
     assert_eq!(r["panels"][0]["sheet"], "black 0.40");
     std::fs::remove_dir_all(&out).unwrap();
 }
+
+#[test]
+fn project_construction_and_print() {
+    let out = std::env::temp_dir().join(format!("latexpat-cli-test-print-{}", std::process::id()));
+    let o = Command::new(env!("CARGO_BIN_EXE_latexpat"))
+        .arg("flatten")
+        .arg("--project")
+        .arg(data("top.project.json"))
+        .args(["--pdf", "letter"])
+        .arg("-o")
+        .arg(&out)
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let stdout = String::from_utf8_lossy(&o.stdout);
+    // The example top has a bound neckline and a folded hem.
+    assert!(stdout.contains("trim for neckline"), "{stdout}");
+    assert!(stdout.contains("Hem the hem edge"), "{stdout}");
+    assert!(stdout.contains("Finish the neckline edge"), "{stdout}");
+    assert!(out.join("trim_00.svg").exists());
+    let pdf = std::fs::read_to_string(out.join("pattern.pdf")).unwrap();
+    assert!(pdf.starts_with("%PDF-1.4") && pdf.contains("/MediaBox [0 0 612.00 792.00]"));
+    let r: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(out.join("report.json")).unwrap()).unwrap();
+    assert_eq!(r["trims"][0]["edge"], "neckline");
+    std::fs::remove_dir_all(&out).unwrap();
+}

@@ -52,9 +52,17 @@ const done = (p) => p.waitForFunction(
   const garmentReady = () => page.waitForFunction(
     () => /Ready|cannot|error/i.test(document.getElementById('g-status').textContent),
     null, { timeout: 60000 });
+  // Templates: the cincher makes four pieces; then work from the top.
+  await page.waitForFunction(() => document.querySelectorAll('#g-template option').length >= 4);
+  await page.selectOption('#g-template', 'cincher');
+  assert.match(await page.textContent('#g-template-note'), /back zip/);
   await page.click('#g-example');
+  await page.waitForFunction(() => design.curves.some((c) => c.name === 'bottom'));
   await garmentReady();
-  assert.match(await page.textContent('#g-status'), /2 flat pieces/);
+  assert.match(await page.textContent('#g-status'), /4 flat pieces/);
+  await page.selectOption('#g-template', 'top');
+  await page.click('#g-example');
+  await page.waitForFunction(() => /2 flat pieces/.test(document.getElementById('g-status').textContent), null, { timeout: 60000 });
   await page.click('#g-new-seam');
   await page.locator('#viewer').scrollIntoViewIfNeeded();
   const box = await page.locator('#viewer').boundingBox();
@@ -106,6 +114,13 @@ const done = (p) => p.waitForFunction(
   await page.mouse.click(zbox.x + zbox.width * 0.5, zbox.y + zbox.height * 0.42);
   await page.waitForFunction(() => document.querySelectorAll('#g-zones tr').length === 2, null, { timeout: 30000 });
   await garmentReady();
+  // Finishes: the example's hem is folded; make the side seam a zip.
+  await page.locator('#g-curves li', { hasText: 'hem (edge' }).click();
+  assert.equal(await page.inputValue('#g-edge-finish'), 'hem');
+  assert.ok(await page.isHidden('#g-seam-finish-wrap'));
+  await page.locator('#g-curves li', { hasText: /^side \(seam/ }).click();
+  await page.selectOption('#g-seam-finish', 'zip');
+  assert.match(await page.locator('#g-curves').innerText(), /side \(seam.*zip\)/);
   await page.fill('#length-relief', '40');
   await page.click('#run');
   await page.waitForFunction(
@@ -117,6 +132,14 @@ const done = (p) => p.waitForFunction(
   // One layout per sheet, with a materials list.
   assert.equal(await page.locator('#materials-out img').count(), 2);
   assert.match(await page.locator('#materials-out table').innerText(), /red 0\.40/);
+  // Construction: the assembly guide, the neckline's trim strip and the PDF.
+  const steps = await page.locator('#assembly li').allInnerTexts();
+  assert.ok(steps.some((s) => /^Fit the zip in the side/.test(s)), steps.join('\n'));
+  assert.ok(steps.some((s) => /^Hem the hem edge/.test(s)), steps.join('\n'));
+  assert.equal(await page.locator('#trims-out img').count(), 1);
+  const pdfHref = await page.locator('#downloads a', { hasText: 'pattern.pdf' }).getAttribute('href');
+  const pdfHead = await page.evaluate(async (u) => (await (await fetch(u)).text()).slice(0, 8), pdfHref);
+  assert.equal(pdfHead, '%PDF-1.4');
   await page.fill('#length-relief', '100');
   await page.evaluate(() => localStorage.clear());
 

@@ -17,6 +17,7 @@ use latexpat_core::job::{self, EaseSpec, JobOptions, JobOutput, Report};
 use latexpat_core::nest::NestOptions;
 use latexpat_core::obj::{parse_obj, write_obj};
 use latexpat_core::pattern::PatternOptions;
+use latexpat_core::pdf::{Paper, PrintOptions};
 use latexpat_core::project::Project;
 use latexpat_core::seams::AllowanceSide;
 use latexpat_core::svg::HeatmapMetric;
@@ -175,6 +176,18 @@ struct FlattenArgs {
     /// Do not rotate pieces by 90° when laying them out.
     #[arg(long)]
     no_rotate: bool,
+    /// Strip on each side of a zip seam for the zip tape (mm).
+    #[arg(long, default_value_t = 10.0)]
+    zip_allowance: f64,
+    /// Also write pattern.pdf: pieces at full size tiled over this paper.
+    #[arg(long, value_enum)]
+    pdf: Option<PaperArg>,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum PaperArg {
+    A4,
+    Letter,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -386,6 +399,7 @@ fn flatten(args: FlattenArgs) -> Result<()> {
     for (name, v) in [
         ("--glue-allowance", args.glue_allowance),
         ("--hem-allowance", args.hem_allowance),
+        ("--zip-allowance", args.zip_allowance),
         ("--notch-spacing", args.notch_spacing),
         ("--sheet-gap", args.sheet_gap),
     ] {
@@ -397,7 +411,7 @@ fn flatten(args: FlattenArgs) -> Result<()> {
         bail!("--heatmap-range must be greater than 1");
     }
     let mut materials = None;
-    let (mesh, seams, source, up, along, zones) = match (&args.project, &args.mesh) {
+    let (mesh, seams, source, up, along, zones, edges) = match (&args.project, &args.mesh) {
         (Some(path), _) => {
             let t =
                 fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
@@ -446,6 +460,7 @@ fn flatten(args: FlattenArgs) -> Result<()> {
                 DVec3::Y,
                 Some(along),
                 zones,
+                g.edges,
             )
         }
         (None, Some(path)) => {
@@ -468,6 +483,7 @@ fn flatten(args: FlattenArgs) -> Result<()> {
                 path.display().to_string(),
                 args.up.vec(),
                 None,
+                Vec::new(),
                 Vec::new(),
             )
         }
@@ -516,6 +532,7 @@ fn flatten(args: FlattenArgs) -> Result<()> {
             allowance_side: args.allowance_side.into(),
             hem_allowance: args.hem_allowance,
             notch_spacing: (args.notch_spacing > 0.0).then_some(args.notch_spacing),
+            zip_allowance: args.zip_allowance,
         },
         heatmap: match args.heatmap {
             Heatmap::None => None,
@@ -535,6 +552,14 @@ fn flatten(args: FlattenArgs) -> Result<()> {
             sheet_width: w,
             gap: args.sheet_gap,
             allow_rotation: !args.no_rotate,
+        }),
+        edges,
+        print: args.pdf.map(|p| PrintOptions {
+            paper: match p {
+                PaperArg::A4 => Paper::A4,
+                PaperArg::Letter => Paper::Letter,
+            },
+            ..Default::default()
         }),
     };
     let out = job::run(&mesh, &seams, &opts)?;
@@ -633,6 +658,29 @@ fn write_job(dir: &Path, mesh: &str, scale: f64, out: &JobOutput) -> Result<()> 
             u.pieces,
             u.file
         );
+    }
+    for (k, (t, svg)) in r.trims.iter().zip(&out.trim_svgs).enumerate() {
+        if k == 0 {
+            println!();
+        }
+        let file = format!("trim_{k:02}.svg");
+        write(&dir.join(&file), svg)?;
+        println!(
+            "trim for {}: {:.0} × {:.0} mm (edge {:.0} mm) → {file}",
+            t.edge, t.length_mm, t.width_mm, t.edge_length_mm
+        );
+    }
+    if !r.assembly.is_empty() {
+        println!();
+        println!("assembly:");
+        for (k, step) in r.assembly.iter().enumerate() {
+            println!("{:>3}. {step}", k + 1);
+        }
+    }
+    if let Some(pdf) = &out.pdf {
+        write(&dir.join("pattern.pdf"), pdf)?;
+        println!();
+        println!("print: pattern.pdf (print at 100 %, check the 50 mm square)");
     }
     for w in &out.warnings {
         eprintln!("warning: {w}");

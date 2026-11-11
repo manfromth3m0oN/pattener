@@ -9,6 +9,7 @@
 
 use crate::allowance::polygon_area;
 use crate::arap::ArapOptions;
+use crate::assembly::assembly_steps;
 use crate::calibrate::{calibrate, Calibration, CalibrationResult};
 use crate::cut::cut_panels;
 use crate::ease::{apply_zones, Ease, EaseZone};
@@ -18,9 +19,10 @@ use crate::flatten::{flatten_garment, FlatPanel, FlattenOptions, SeamMatching, S
 use crate::materials::{MaterialPlan, MaterialUse, DEFAULT_SHEAR_MODULUS_MPA};
 use crate::mesh::Mesh;
 use crate::nest::{nest, NestOptions, Placement};
-use crate::pattern::{build_pattern, PatternOptions};
+use crate::pattern::{build_pattern, trim_strips, EdgeSpec, PatternOptions, TrimStrip};
+use crate::pdf::{pattern_pdf, piece_drawing, trim_drawing, PrintOptions};
 use crate::seams::SeamSet;
-use crate::svg::{layout_svg, panel_svg, EdgeLabel, HeatmapMetric, SvgOptions};
+use crate::svg::{layout_svg, panel_svg, trim_svg, EdgeLabel, HeatmapMetric, SvgOptions};
 use glam::{DVec2, DVec3};
 
 /// Pressure (mmHg) above which 5 % of a piece triggers a warning: the
@@ -77,6 +79,10 @@ pub struct JobOptions {
     /// Which sheet each panel is cut from (overrides per-panel ease and
     /// stiffness, and lays each sheet out on its own roll).
     pub materials: Option<MaterialPlan>,
+    /// Finishes of the garment's open edges (hems, trims).
+    pub edges: Vec<EdgeSpec>,
+    /// Also produce a tiled print-at-home PDF.
+    pub print: Option<PrintOptions>,
 }
 
 impl Default for JobOptions {
@@ -96,6 +102,8 @@ impl Default for JobOptions {
             ease_zones: Vec::new(),
             material: Material::default(),
             materials: None,
+            edges: Vec::new(),
+            print: None,
         }
     }
 }
@@ -171,6 +179,10 @@ pub struct Report {
     pub layout: Option<LayoutReport>,
     /// Use of each sheet of the material plan.
     pub materials: Vec<MaterialUse>,
+    /// Trim strips to cut (SVGs `trim_NN.svg`, in this order).
+    pub trims: Vec<TrimStrip>,
+    /// Gluing steps, in order.
+    pub assembly: Vec<String>,
 }
 
 /// Result of [`run`].
@@ -185,6 +197,10 @@ pub struct JobOutput {
     /// One layout per sheet of the material plan, parallel to
     /// `report.materials`.
     pub material_layouts: Vec<String>,
+    /// One SVG per trim strip, parallel to `report.trims`.
+    pub trim_svgs: Vec<String>,
+    /// The tiled PDF (plain ASCII), if [`JobOptions::print`] was set.
+    pub pdf: Option<String>,
     /// Human-readable warnings.
     pub warnings: Vec<String>,
     /// Pressure and bridging map on the input mesh.
@@ -308,7 +324,8 @@ pub fn run(mesh: &Mesh, seams: &SeamSet, opts: &JobOptions) -> Result<JobOutput>
     };
     let garment = flatten_garment(mesh, seams, &fopts)?;
     let fit = pressure_map(mesh, &garment, &pressure_k);
-    let pieces = build_pattern(&garment, seams, &opts.pattern);
+    let pieces = build_pattern(&garment, seams, &opts.pattern, &opts.edges);
+    let trims = trim_strips(&garment, &opts.edges);
 
     let mut report = Report {
         calibration,
@@ -316,8 +333,11 @@ pub fn run(mesh: &Mesh, seams: &SeamSet, opts: &JobOptions) -> Result<JobOutput>
         seams: vec![],
         layout: None,
         materials: vec![],
+        trims: trims.clone(),
+        assembly: assembly_steps(&garment, &pieces, seams, &opts.edges, &trims),
     };
     let mut panel_svgs = Vec::new();
+    let mut titles = Vec::new();
     for (i, fp) in garment.panels.iter().enumerate() {
         let names = seam_names(fp, seams);
         let label = if names.is_empty() {
@@ -331,11 +351,12 @@ pub fn run(mesh: &Mesh, seams: &SeamSet, opts: &JobOptions) -> Result<JobOutput>
             &SvgOptions {
                 heatmap: opts.heatmap,
                 range: opts.heatmap_range,
-                label: Some(label),
+                label: Some(label.clone()),
                 edge_labels: edge_labels(i, &garment.seams, seams),
                 ..Default::default()
             },
         ));
+        titles.push(label);
         let size = fp.uv.iter().fold(DVec2::ZERO, |m, p| m.max(*p));
         let cut_size = {
             let o = &pieces[i].cut_outline;
@@ -417,9 +438,16 @@ pub fn run(mesh: &Mesh, seams: &SeamSet, opts: &JobOptions) -> Result<JobOutput>
 
     let mut layout = None;
     if let Some(sheet) = &opts.sheet {
-        let outlines: Vec<_> = pieces.iter().map(|p| p.cut_outline.clone()).collect();
+        let outlines: Vec<_> = pieces
+            .iter()
+            .map(|p| p.cut_outline.clone())
+            .chain(trims.iter().map(|t| t.outline()))
+            .collect();
         let l = nest(&outlines, sheet)?;
-        let labels: Vec<String> = (0..pieces.len()).map(|i| format!("panel {i}")).collect();
+        let labels: Vec<String> = (0..pieces.len())
+            .map(|i| format!("panel {i}"))
+            .chain(trims.iter().map(|t| format!("{} trim", t.edge)))
+            .collect();
         layout = Some(layout_svg(&outlines, &labels, &l));
         report.layout = Some(LayoutReport {
             file: "layout.svg".into(),
@@ -440,24 +468,46 @@ pub fn run(mesh: &Mesh, seams: &SeamSet, opts: &JobOptions) -> Result<JobOutput>
             let ids: Vec<usize> = (0..pieces.len())
                 .filter(|&i| plan.panel_sheet[i] == si)
                 .collect();
-            if ids.is_empty() {
+            let trim_ids: Vec<usize> = (0..trims.len())
+                .filter(|&t| {
+                    trims[t]
+                        .panels
+                        .first()
+                        .is_some_and(|&p| plan.panel_sheet[p] == si)
+                })
+                .collect();
+            if ids.is_empty() && trim_ids.is_empty() {
                 continue;
             }
-            let outlines: Vec<_> = ids.iter().map(|&i| pieces[i].cut_outline.clone()).collect();
+            let outlines: Vec<_> = ids
+                .iter()
+                .map(|&i| pieces[i].cut_outline.clone())
+                .chain(trim_ids.iter().map(|&t| trims[t].outline()))
+                .collect();
             let nest_opts = NestOptions {
                 sheet_width: sheet.roll_width_mm,
                 gap,
                 allow_rotation,
             };
+            let names: Vec<String> = ids
+                .iter()
+                .map(|i| format!("panel {i}"))
+                .chain(trim_ids.iter().map(|&t| format!("{} trim", trims[t].edge)))
+                .collect();
             let l = nest(&outlines, &nest_opts).map_err(|e| match e {
-                Error::PieceTooWide { piece, width, height, .. } => Error::Material(format!(
-                    "panel {} ({width:.0} × {height:.0} mm) does not fit sheet '{}' ({:.0} mm wide); \
+                Error::PieceTooWide {
+                    piece,
+                    width,
+                    height,
+                    ..
+                } => Error::Material(format!(
+                    "{} ({width:.0} × {height:.0} mm) does not fit sheet '{}' ({:.0} mm wide); \
                      use a wider roll, allow rotation, or add a seam to split it",
-                    ids[piece], sheet.name, sheet.roll_width_mm
+                    names[piece], sheet.name, sheet.roll_width_mm
                 )),
                 other => other,
             })?;
-            let labels: Vec<String> = ids.iter().map(|i| format!("panel {i}")).collect();
+            let labels = names;
             let area: f64 = outlines.iter().map(|o| polygon_area(o).abs()).sum::<f64>() / 1e6;
             let file = format!("layout_{}.svg", file_stem(&sheet.name));
             report.materials.push(MaterialUse {
@@ -476,11 +526,58 @@ pub fn run(mesh: &Mesh, seams: &SeamSet, opts: &JobOptions) -> Result<JobOutput>
         }
     }
 
+    let pdf = opts.print.map(|print| {
+        let mut info = vec![
+            "Print at 100 % (actual size, no scaling), then check the 50 mm square.".to_string(),
+            "Trim each page on its corner marks where it overlaps the next one, line the \
+             pieces up and tape them together. Solid lines are cut lines; dashed lines show \
+             where the overlap of a seam or hem starts; numbered ticks are notches."
+                .to_string(),
+        ];
+        if !report.materials.is_empty() {
+            info.push("Materials:".into());
+            for u in &report.materials {
+                let cost = u.cost.map(|c| format!(", cost {c:.2}")).unwrap_or_default();
+                info.push(format!(
+                    "{} ({:.2} mm): {:.2} m of {:.0} mm roll for pieces {:?}{cost}",
+                    u.sheet,
+                    u.thickness_mm,
+                    u.length_mm / 1000.0,
+                    u.roll_width_mm,
+                    u.pieces
+                ));
+            }
+        }
+        info.push("Assembly:".into());
+        info.extend(
+            report
+                .assembly
+                .iter()
+                .enumerate()
+                .map(|(k, step)| format!("{}. {step}", k + 1)),
+        );
+        let drawings: Vec<_> = garment
+            .panels
+            .iter()
+            .zip(&pieces)
+            .zip(&titles)
+            .map(|((fp, piece), t)| piece_drawing(t, fp, piece))
+            .chain(
+                trims
+                    .iter()
+                    .map(|t| trim_drawing(&format!("{} trim", t.edge), t)),
+            )
+            .collect();
+        pattern_pdf("Latex pattern", &info, &drawings, &print)
+    });
+
     Ok(JobOutput {
         report,
         panel_svgs,
         layout_svg: layout,
         material_layouts,
+        trim_svgs: trims.iter().map(trim_svg).collect(),
+        pdf,
         warnings,
         fit,
     })

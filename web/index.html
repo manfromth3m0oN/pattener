@@ -64,14 +64,34 @@
               <select id="g-paint-sheet" aria-label="Sheet to paint"></select>
               <button type="button" id="g-paint-clear" title="Every piece back to the default sheet">Unpaint all</button>
             </span>
-            <button type="button" id="g-example">Load example top</button>
+            <span class="toolbar-group">
+              <select id="g-template" aria-label="Template"></select>
+              <button type="button" id="g-example">Start from template</button>
+            </span>
             <button type="button" id="g-clear">Clear</button>
           </div>
           <div id="g-active" class="toolbar" hidden>
             <label>Name <input type="text" id="g-name"></label>
             <label class="check"><input type="checkbox" id="g-closed"> Closed loop</label>
             <label class="check"><input type="checkbox" id="g-mirror"> Mirror to other side</label>
+            <label id="g-seam-finish-wrap">Seam
+              <select id="g-seam-finish"><option value="glued">glued (lap)</option><option value="zip">zip</option></select>
+            </label>
+            <span id="g-edge-finish-wrap">
+              <label>Finish
+                <select id="g-edge-finish">
+                  <option value="">hem allowance (pattern setting)</option>
+                  <option value="raw">raw (cut on the line)</option>
+                  <option value="hem">folded hem</option>
+                  <option value="trim">trim strip</option>
+                </select>
+              </label>
+              <label id="g-finish-width-wrap">Width (mm) <input type="number" id="g-finish-width" value="15" step="1" min="1"></label>
+              <label id="g-finish-ease-wrap" title="The strip is cut shorter than the edge so it hugs the body">Trim length (% of edge)
+                <input type="number" id="g-finish-ease" value="90" step="1" min="50" max="100"></label>
+            </span>
           </div>
+          <p id="g-template-note" class="hint"></p>
           <ul id="g-curves" class="curve-list"></ul>
           <div id="g-zones-wrap" hidden>
             <h4>Ease zones</h4>
@@ -142,6 +162,7 @@
         <select id="allowance-side"><option>left</option><option>right</option><option>both</option><option>none</option></select>
       </label>
       <label>Hem allowance (mm) <input type="number" id="hem" value="0" step="1" min="0"></label>
+      <label title="Strip on each side of a zip seam for gluing the zip tape">Zip allowance (mm) <input type="number" id="zip" value="10" step="1" min="0"></label>
       <label>Notch spacing (mm) <input type="number" id="notch" value="50" step="5" min="0"></label>
       <label title="Latex is usually reduced less along the body than around it; 30–50 % is typical.">Lengthwise reduction (% of around)
         <input type="number" id="length-relief" value="100" step="5" min="0" max="100"></label>
@@ -151,6 +172,9 @@
         <select id="heatmap"><option value="">none</option><option value="max_stretch">max stretch</option><option value="area_stretch">area stretch</option></select>
       </label>
       <label>Sheet width (mm, optional) <input type="number" id="sheet-width" placeholder="e.g. 1000" min="0"></label>
+      <label title="A PDF with every piece at full size, tiled over home-printer pages">Printable PDF
+        <select id="paper"><option value="a4">A4</option><option value="letter">Letter</option><option value="">none</option></select>
+      </label>
       <label class="check"><input type="checkbox" id="match" checked> Match seam lengths</label>
     </div>
     <details id="calib-details">
@@ -176,9 +200,11 @@
     <h3>Seams</h3>
     <table id="seam-table"></table>
     <div id="materials-out"></div>
+    <div id="assembly-out"></div>
+    <div id="trims-out"></div>
     <div id="layout"></div>
     <div id="pieces" class="pieces"></div>
-    <p class="hint">Print SVGs at 100 % and check the 50 mm scale bar. Mark notches with a pen; snipping latex starts tears.</p>
+    <p class="hint">Print the PDF or the SVGs at 100 % and check the 50 mm square or scale bar. Mark notches with a pen; snipping latex starts tears.</p>
   </section>
 </main>
 <script src="viewer.js"></script>

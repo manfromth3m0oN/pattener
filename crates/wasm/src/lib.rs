@@ -21,7 +21,8 @@
 //! { "command": "human", "body": { "measurements": {"height": 1680, ...}, "shape": {...} } }
 //! { "command": "garment", "body": {...}, "design": {...}, "pattern": false, "options": {...} }
 //! ```
-//! `options` for `pattern` is a [`JobOptions`] (every field optional).
+//! `options` for `pattern` is a [`JobOptions`] (every field optional); with
+//! `"print": {"paper": "a4"}` the output carries a tiled PDF as `pdf`.
 //! Responses are `{"ok": true, ...}` or `{"ok": false, "error": "..."}`.
 
 use latexpat_core::body::{torso, BodyMeasurements, BodyOptions};
@@ -259,6 +260,7 @@ fn run(request: &str) -> Result<Value, String> {
                         Some(along_body(&b.joints, &centres).map_err(|e| e.to_string())?);
                     options.ease_zones = zones.clone();
                     options.materials = plan.clone();
+                    options.edges = g.edges.clone();
                     Some(job::run(m, &g.seams, &options).map_err(|e| e.to_string())?)
                 }
                 (None, true) => {
@@ -410,7 +412,8 @@ mod tests {
         .unwrap();
         let req = |pattern: bool| {
             json!({ "command": "garment", "body": project["body"], "design": project["garment"],
-                    "materials": project["materials"], "pattern": pattern })
+                    "materials": project["materials"], "pattern": pattern,
+                    "options": { "print": { "paper": "letter" } } })
             .to_string()
         };
         let preview = parse(&handle(&req(false)));
@@ -429,6 +432,17 @@ mod tests {
         assert!(n > 0 && n.is_multiple_of(3));
         let full = parse(&handle(&req(true)));
         assert_eq!(full["output"]["panel_svgs"].as_array().unwrap().len(), 2);
+        // The example's finishes: a neckline trim and a step for each.
+        assert_eq!(full["output"]["report"]["trims"][0]["edge"], "neckline");
+        assert_eq!(full["output"]["trim_svgs"].as_array().unwrap().len(), 1);
+        let steps = full["output"]["report"]["assembly"].as_array().unwrap();
+        assert!(steps
+            .iter()
+            .any(|s| s.as_str().unwrap().starts_with("Hem the hem")));
+        assert!(full["output"]["pdf"]
+            .as_str()
+            .unwrap()
+            .contains("/MediaBox [0 0 612.00 792.00]"));
         // Pressure on every body vertex; positive on the garment somewhere.
         let p = full["pressure"].as_array().unwrap();
         assert_eq!(p.len(), full["positions"].as_array().unwrap().len() / 3);
