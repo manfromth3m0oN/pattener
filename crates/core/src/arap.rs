@@ -148,7 +148,7 @@ pub fn arap(panel: &Panel, ease: &[f64], init: &[DVec2], opts: &ArapOptions) -> 
         }
 
         energy = arap_energy(panel, &refs, &w, &rot, &uv);
-        if prev - energy <= opts.tolerance * prev {
+        if prev.is_finite() && prev - energy <= opts.tolerance * prev {
             break;
         }
         prev = energy;
