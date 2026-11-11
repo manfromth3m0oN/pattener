@@ -457,6 +457,7 @@ dependencies = [
  "anyhow",
  "clap",
  "latexpat-core",
+ "serde",
  "serde_json",
 ]
 
