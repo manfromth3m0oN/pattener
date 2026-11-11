@@ -1,3 +1,4 @@
+[hidden] { display: none !important; }
 :root { font-family: system-ui, sans-serif; color: #1d1d1f; background: #fafafa; }
 body { margin: 0 auto; max-width: 1100px; padding: 1rem 1.5rem 3rem; }
 header p { color: #555; margin-top: -0.5rem; }
@@ -58,3 +59,10 @@ h4 { margin: 0.6rem 0 0.2rem; font-size: 0.95rem; }
 .legend { display: flex; align-items: center; gap: 0.4rem; font-size: 0.8rem; color: #444; margin: 0.3rem 0; }
 .legend .bar { width: 180px; height: 10px; border-radius: 3px;
   background: linear-gradient(to right, rgb(40,90,200) 0%, rgb(242,242,242) 20%, rgb(242,140,26) 60%, rgb(178,0,0) 100%); }
+
+.toolbar-group { display: inline-flex; gap: 0.25rem; align-items: center; }
+#sheets input[type=number] { width: 5.5rem; }
+#sheets input[type=text] { width: 9rem; }
+#sheets input[type=color] { width: 2.5rem; padding: 0.1rem; height: 1.9rem; }
+.swatch { display: inline-block; width: 0.9rem; height: 0.9rem; border-radius: 3px; vertical-align: middle; margin-right: 0.35rem; border: 1px solid #0003; }
+#materials-out img { width: 100%; max-height: 60vh; object-fit: contain; border: 1px solid #e3e3e3; background: white; }

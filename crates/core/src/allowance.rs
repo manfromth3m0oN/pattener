@@ -77,6 +77,50 @@ pub fn offset_polygon(pts: &[DVec2], offsets: &[f64]) -> Vec<DVec2> {
     out
 }
 
+/// Remove self-intersection loops from a closed polygon: while two
+/// non-adjacent edges `i` and `j` cross at `X`, split the polygon there into
+/// `X, p_{i+1} … p_j` and `p_0 … p_i, X, p_{j+1} …`, and keep the part with
+/// the larger area. At an inward corner, an allowance offset folds over
+/// itself in a small loop; this trims it to the outline you would cut.
+pub fn remove_loops(mut pts: Vec<DVec2>) -> Vec<DVec2> {
+    for _ in 0..pts.len() {
+        let n = pts.len();
+        let mut hit = None;
+        'search: for i in 0..n {
+            for j in i + 2..n {
+                if i == 0 && j == n - 1 {
+                    continue;
+                }
+                let (a, b, c, d) = (pts[i], pts[(i + 1) % n], pts[j], pts[(j + 1) % n]);
+                if segments_cross(a, b, c, d) {
+                    // Intersection: a + t (b − a) with t = ((c − a) × (d − c)) / ((b − a) × (d − c)).
+                    let t = (c - a).perp_dot(d - c) / (b - a).perp_dot(d - c);
+                    hit = Some((i, j, a + t * (b - a)));
+                    break 'search;
+                }
+            }
+        }
+        let Some((i, j, x)) = hit else {
+            return pts;
+        };
+        let inner: Vec<DVec2> = std::iter::once(x)
+            .chain(pts[i + 1..=j].iter().copied())
+            .collect();
+        let outer: Vec<DVec2> = pts[..=i]
+            .iter()
+            .copied()
+            .chain(std::iter::once(x))
+            .chain(pts[j + 1..].iter().copied())
+            .collect();
+        pts = if polygon_area(&outer).abs() >= polygon_area(&inner).abs() {
+            outer
+        } else {
+            inner
+        };
+    }
+    pts
+}
+
 /// `true` if no two non-adjacent edges of the closed polygon intersect.
 pub fn is_simple(pts: &[DVec2]) -> bool {
     let n = pts.len();
@@ -152,6 +196,33 @@ mod tests {
     fn zero_offsets_are_identity() {
         let pts = square(10.0, 3);
         assert_eq!(offset_polygon(&pts, &vec![0.0; pts.len()]), pts);
+    }
+
+    #[test]
+    fn loops_are_trimmed_to_the_outer_outline() {
+        // A square whose bottom edge folds back on itself in a small loop:
+        // (0,0) → (6,0) → (4,-1) → (4,1) → (10,0) …
+        let pts = vec![
+            DVec2::new(0.0, 0.0),
+            DVec2::new(6.0, 0.0),
+            DVec2::new(4.0, -1.0),
+            DVec2::new(4.0, 1.0),
+            DVec2::new(10.0, 0.0),
+            DVec2::new(10.0, 10.0),
+            DVec2::new(0.0, 10.0),
+        ];
+        assert!(!is_simple(&pts));
+        let fixed = remove_loops(pts);
+        assert!(is_simple(&fixed));
+        assert!(fixed.len() < 7);
+        assert!(
+            (polygon_area(&fixed) - 100.0).abs() < 6.0,
+            "{}",
+            polygon_area(&fixed)
+        );
+        // A simple polygon is left alone.
+        let sq = square(10.0, 2);
+        assert_eq!(remove_loops(sq.clone()), sq);
     }
 
     #[test]

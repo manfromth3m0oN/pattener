@@ -78,13 +78,70 @@ Below the 3D view, draw the garment on the body:
   Pressure uses the calibrated sheets, or `--thickness` (default 0.40 mm)
   with μ = 0.45 MPa.
 
+### Latex sheets and colour
+
+A project has a catalogue of sheets: name, colour, thickness, roll width,
+and optionally its own ease, rubber stiffness and price per metre. Every
+piece uses the default sheet unless you **paint** it another one on the
+body (the piece containing the point you click; points rather than piece
+numbers, so the choice survives changes to the seams). The 3D preview
+shows each piece in its sheet's colour.
+
+Each piece then takes its sheet's ease (the sheet's own, else its swatch
+calibration by name or thickness, else the global ease) and stiffness
+(for seam matching and the pressure map), and each sheet's pieces are
+laid out on its roll width (`layout_<sheet>.svg`). The materials list
+gives the length of each roll to buy, the area of the pieces, how much of
+the roll is used, and the cost.
+
+### Templates
+
+**Start from template** replaces the garment with one of these starting
+designs, built from the body's tape loops so they follow your measurements:
+
+| Template | Pieces | Construction |
+|---|---|---|
+| Short-sleeved top | front, back | shoulder and side seams; trimmed neckline, folded hem |
+| Leggings | one per leg | centre front and back, inside leg; folded waist |
+| Catsuit | left and right front and back | back zip from neck to crotch, seams over and under the arms, down the sides and inside legs; trimmed neckline |
+| Waist cincher | left and right front and back | back zip, side seams; trimmed top and bottom |
+
+Every curve stays editable: move points, add seams, change finishes.
+`cargo run -p latexpat-core --features serde,bundled-body --example
+gen_garment_examples` regenerates `web/examples/` from
+`garment::examples::TEMPLATES`.
+
+### Construction and printing
+
+Select a curve to choose how it is made. A **seam** is glued (a lap seam:
+one piece's allowance under the other's edge) or a **zip** (each side gets
+a strip, `--zip-allowance`, default 10 mm, to glue the zip tape under). An
+**edge** is left to the pattern's hem allowance, cut **raw** on the line
+(latex does not fray), given a **folded hem** of its own width, or bound
+with a **trim strip**: a separate strip of the given width, cut shorter
+than the edge (90 % by default) so it hugs the body. Trim strips are
+listed with their sizes, drawn as `trim_NN.svg` with quarter marks to
+spread the stretch evenly, and laid out with the pieces.
+
+The **assembly guide** orders the work: cut and mark notches, join the
+pieces into one (shortest seams first), close the remaining seams, then fit
+zips, hem, and bind edges. Each step names the pieces, which one carries
+the lap, and the notches to match.
+
+**Printable PDF** (`--pdf a4` or `--pdf letter`, or the selector in the
+web app) puts every piece at full size over home-printer pages that
+overlap by 10 mm, with corner marks, a row/column label on each page, a
+50 mm check square, the materials list and the assembly guide. Print at
+100 %, check the square, trim and tape the pages together.
+
 Each piece's report gives its stretch range and the stretch that 95 % of
 its area stays under, which is not thrown off by a few tiny triangles at
 sharp seam corners the way the maximum is.
 
 The preview shows the garment in latex colour and says how many flat
 pieces the seams make, or which piece still wraps around and needs a seam.
-**Load example top** gives a short-sleeved top to start from. Designs are
+**Start from template** gives a top, leggings, a catsuit or a waist cincher
+to start from (see Templates below). Designs are
 stored as positions on the body model's triangles, which are the same for
 every body, so a design follows the body when the measurements change.
 
@@ -149,6 +206,8 @@ cargo run --release -p latexpat -- flatten body.obj --seams seams.json --ease 0.
 | `--sheet-width MM` | lay all pieces out on a sheet this wide and write `layout.svg` |
 | `--sheet-gap MM` | gap between pieces on the sheet (default 5) |
 | `--no-rotate` | keep pieces upright on the sheet |
+| `--zip-allowance MM` | strip on each side of a zip seam (default 10) |
+| `--pdf PAPER` | also write `pattern.pdf`, tiled over `a4` or `letter` pages |
 
 Output:
 - `out/panel_NN.svg`: 1:1 scale in mm with a 50 mm scale bar to check
@@ -159,6 +218,9 @@ Output:
   panel they join.
 - `out/layout.svg` (with `--sheet-width`): all pieces on the sheet, and the
   length of sheet needed.
+- `out/trim_NN.svg`: trim strips, from edges finished with a trim.
+- `out/pattern.pdf` (with `--pdf`): pieces tiled for home printing, with
+  the materials list and assembly guide.
 - `out/report.json`: per-panel stretch range, areas, flat and cut sizes,
   notches; per-seam lengths before and after matching; layout placements. Heatmap colours: blue = slack (σ < 1), white = unstretched,
 orange = stretched (σ > 1).
@@ -265,7 +327,8 @@ to GitHub Pages (Settings → Pages → Source must be "GitHub Actions").
    fixed-width sheet (rotation only, never mirrored, since latex has a
    shiny and a matte face).
 9. `flatten::orient` + `svg::panel_svg` / `svg::layout_svg`: upright
-   placement and SVG export.
+   placement and SVG export; `pdf::pattern_pdf` tiles the pieces for
+   printing and `assembly::assembly_steps` writes the gluing order.
 
 `body::torso` builds the mesh and seams from measurements, and `job::run`
 wraps steps 2–9 into one call returning SVG strings, a report and warnings;
@@ -299,6 +362,5 @@ flatten to sides 3.1 mm apart; matching removes the gap edge by edge
 
 Next, towards designing whole garments: full body from measurements with a
 3D view and project files (done); garments drawn on the body (done); fit
-tools (done); materials and colour (sheet
-catalogue, per-panel colour, preview, quantities); construction details
-and print output (zips, trims, tiled PDF, assembly guide); templates.
+tools (done); materials and colour (done); construction details and print output
+(done); templates (done). Later: posing the body.

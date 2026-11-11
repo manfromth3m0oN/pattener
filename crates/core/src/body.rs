@@ -240,6 +240,7 @@ pub fn torso(m: &BodyMeasurements, opts: &BodyOptions) -> Result<Body> {
         vertices: (0..rings).map(|j| id(col, j)).collect(),
         notches: inner.iter().map(|&j| id(col, j)).collect(),
         allowance: None,
+        finish: Default::default(),
     };
     let (q, off) = (n / 4, (n * 3 + 16) / 32); // princess lines ~34° from centre
     let mut seams = vec![seam("side_left", 0), seam("side_right", 2 * q)];

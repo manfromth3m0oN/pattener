@@ -53,7 +53,8 @@ pub mod examples;
 
 use crate::error::{Error, Result};
 use crate::mesh::Mesh;
-use crate::seams::{Seam, SeamSet};
+use crate::pattern::{EdgeFinish, EdgeSpec};
+use crate::seams::{Seam, SeamFinish, SeamSet};
 use edit::{locate, EditMesh};
 use glam::DVec3;
 use std::collections::{HashMap, HashSet};
@@ -98,6 +99,16 @@ pub struct Curve {
     pub closed: bool,
     /// Also draw the mirror image on the other side of the body.
     pub mirror: bool,
+    /// For a seam: glued, or a zip.
+    #[cfg_attr(
+        feature = "serde",
+        serde(skip_serializing_if = "crate::seams::SeamFinish::is_default")
+    )]
+    pub seam_finish: SeamFinish,
+    /// For an edge: how it is finished; `None` uses the job's hem
+    /// allowance.
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+    pub edge_finish: Option<EdgeFinish>,
 }
 
 /// A region of the body with its own ease (see
@@ -115,7 +126,15 @@ pub struct DesignZone {
     pub mirror: bool,
 }
 
-/// A garment: curves, a point inside it, and ease zones.
+/// "The piece containing this point is cut from this sheet."
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct SheetAssignment {
+    pub point: SurfacePoint,
+    pub sheet: String,
+}
+
+/// A garment: curves, a point inside it, ease zones and sheets.
 #[derive(Debug, Clone, PartialEq, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(default))]
@@ -124,6 +143,89 @@ pub struct GarmentDesign {
     /// A point on the body inside the garment.
     pub inside: Option<SurfacePoint>,
     pub zones: Vec<DesignZone>,
+    /// Sheet for pieces without an assignment (default: the first sheet).
+    pub default_sheet: Option<String>,
+    /// Pieces cut from other sheets, chosen by a point on them. Points,
+    /// not panel numbers, so assignments survive changes to the seams.
+    pub sheet_assignments: Vec<SheetAssignment>,
+}
+
+/// Per panel of a built garment (in cut order), its triangles as indices
+/// into the garment mesh.
+pub fn panel_faces(g: &BuiltGarment) -> Result<Vec<Vec<u32>>> {
+    let Some(mesh) = &g.mesh else {
+        return Ok(Vec::new());
+    };
+    let panels = crate::cut::cut_panels(mesh, &g.seams.resolve(mesh)?)?;
+    Ok(panels.into_iter().map(|p| p.face_origin).collect())
+}
+
+/// Resolve the design's sheets on a built garment: each panel gets the
+/// default sheet, then each assignment sets the sheet of the panel nearest
+/// its point (later assignments win). `body` is the fitted body the design
+/// was built on; `sheets` the project's catalogue. Returns `None` without
+/// sheets, plus warnings for assignments that miss the garment or name an
+/// unknown sheet.
+pub fn material_plan(
+    body: &Mesh,
+    g: &BuiltGarment,
+    design: &GarmentDesign,
+    sheets: &[crate::materials::Sheet],
+) -> Result<(Option<crate::materials::MaterialPlan>, Vec<String>)> {
+    let mut warnings = Vec::new();
+    let (Some(mesh), false) = (&g.mesh, sheets.is_empty()) else {
+        return Ok((None, warnings));
+    };
+    let index = |name: &str| sheets.iter().position(|s| s.name == name);
+    let default = match &design.default_sheet {
+        Some(n) => index(n).ok_or_else(|| {
+            Error::Material(format!("default sheet '{n}' is not in the catalogue"))
+        })?,
+        None => 0,
+    };
+    let faces = panel_faces(g)?;
+    let mut face_panel = vec![usize::MAX; mesh.triangles().len()];
+    for (p, fs) in faces.iter().enumerate() {
+        for &f in fs {
+            face_panel[f as usize] = p;
+        }
+    }
+    let mut panel_sheet = vec![default; faces.len()];
+    for a in &design.sheet_assignments {
+        let Some(si) = index(&a.sheet) else {
+            warnings.push(format!(
+                "sheet '{}' is not in the catalogue; its assignment is ignored",
+                a.sheet
+            ));
+            continue;
+        };
+        let Some(p) = a.point.position(body.positions(), body.triangles()) else {
+            warnings.push(format!(
+                "an assignment of sheet '{}' is off the body",
+                a.sheet
+            ));
+            continue;
+        };
+        let sp = locate(mesh.positions(), mesh.triangles(), p);
+        let q = sp
+            .position(mesh.positions(), mesh.triangles())
+            .expect("located on mesh");
+        if q.distance(p) > 10.0 {
+            warnings.push(format!(
+                "an assignment of sheet '{}' is not on the garment; it is ignored",
+                a.sheet
+            ));
+            continue;
+        }
+        panel_sheet[face_panel[sp.face as usize]] = si;
+    }
+    Ok((
+        Some(crate::materials::MaterialPlan {
+            sheets: sheets.to_vec(),
+            panel_sheet,
+        }),
+        warnings,
+    ))
 }
 
 /// The design's ease zones placed on `body` (which has the body model's
@@ -160,6 +262,8 @@ pub struct CurvePath {
     pub closed: bool,
     /// Vertex indices into [`BuiltGarment::body`], in order.
     pub vertices: Vec<u32>,
+    pub seam_finish: SeamFinish,
+    pub edge_finish: Option<EdgeFinish>,
 }
 
 /// Result of [`build`].
@@ -174,6 +278,9 @@ pub struct BuiltGarment {
     pub mesh: Option<Mesh>,
     /// Seams in `mesh` vertex indices.
     pub seams: SeamSet,
+    /// Finished edges (those with an `edge_finish`) in `mesh` vertex
+    /// indices.
+    pub edges: Vec<EdgeSpec>,
     /// For each vertex of `mesh`, its vertex in `body`.
     pub vertex_origin: Vec<u32>,
     pub warnings: Vec<String>,
@@ -288,6 +395,8 @@ pub fn build(body: &Mesh, design: &GarmentDesign) -> Result<BuiltGarment> {
             kind: c.kind,
             closed: c.closed,
             vertices: path,
+            seam_finish: c.seam_finish,
+            edge_finish: c.edge_finish,
         });
     }
 
@@ -305,6 +414,7 @@ pub fn build(body: &Mesh, design: &GarmentDesign) -> Result<BuiltGarment> {
     let mut region = vec![false; body_mesh.triangles().len()];
     let mut mesh = None;
     let mut seams = SeamSet::default();
+    let mut edges: Vec<EdgeSpec> = Vec::new();
     let mut vertex_origin = Vec::new();
     if let Some(inside) = design.inside {
         let p = inside
@@ -352,7 +462,8 @@ pub fn build(body: &Mesh, design: &GarmentDesign) -> Result<BuiltGarment> {
             }
         }
         let gm = Mesh::new(positions, triangles)?;
-        for p in paths.iter().filter(|p| p.kind == CurveKind::Seam) {
+        // Runs of a curve along edges of the garment mesh, in its indices.
+        let runs_of = |p: &CurvePath| {
             let mut runs: Vec<Vec<u32>> = Vec::new();
             let mut cur: Vec<u32> = Vec::new();
             for (a, b) in path_edges(p) {
@@ -375,6 +486,29 @@ pub fn build(body: &Mesh, design: &GarmentDesign) -> Result<BuiltGarment> {
             if cur.len() > 1 {
                 runs.push(cur);
             }
+            runs
+        };
+        for p in paths.iter().filter(|p| p.kind == CurveKind::Edge) {
+            let Some(finish) = p.edge_finish else {
+                continue;
+            };
+            let runs = runs_of(p);
+            let several = runs.len() > 1;
+            for (i, r) in runs.into_iter().enumerate() {
+                edges.push(EdgeSpec {
+                    name: if several {
+                        format!("{} {}", p.name, i + 1)
+                    } else {
+                        p.name.clone()
+                    },
+                    vertices: r,
+                    closed: false,
+                    finish,
+                });
+            }
+        }
+        for p in paths.iter().filter(|p| p.kind == CurveKind::Seam) {
+            let runs = runs_of(p);
             if runs.is_empty() {
                 warnings.push(format!("seam '{}' is outside the garment", p.name));
             }
@@ -387,6 +521,7 @@ pub fn build(body: &Mesh, design: &GarmentDesign) -> Result<BuiltGarment> {
                         p.name.clone()
                     }),
                     vertices: r,
+                    finish: p.seam_finish,
                     ..Default::default()
                 });
             }
@@ -402,6 +537,7 @@ pub fn build(body: &Mesh, design: &GarmentDesign) -> Result<BuiltGarment> {
         region,
         mesh,
         seams,
+        edges,
         vertex_origin,
         warnings,
     })
@@ -928,6 +1064,173 @@ pub(crate) mod tests {
         };
         let (before, after) = (near(&plain), near(&loose));
         assert!(after < 0.5 * before, "{before} -> {after}");
+    }
+
+    #[test]
+    fn sheet_assignments_follow_points() {
+        use crate::materials::Sheet;
+        let (mesh, tapes) = body();
+        let mut design = top(&mesh, &tapes);
+        let sheet = |name: &str, color: &str| Sheet {
+            name: name.into(),
+            color: color.into(),
+            thickness_mm: 0.4,
+            roll_width_mm: 1000.0,
+            ease: None,
+            shear_modulus_mpa: None,
+            price_per_m: None,
+        };
+        let sheets = vec![sheet("black", "#111111"), sheet("red", "#b01020")];
+        let back = extreme(tape(&tapes, MeasureKind::Waist), |p| -p.z);
+        design.sheet_assignments.push(SheetAssignment {
+            point: locate(mesh.positions(), mesh.triangles(), back),
+            sheet: "red".into(),
+        });
+        // Unknown sheet, and a point off the garment (on the thigh).
+        design.sheet_assignments.push(SheetAssignment {
+            point: locate(mesh.positions(), mesh.triangles(), back),
+            sheet: "gold".into(),
+        });
+        let thigh = extreme(tape(&tapes, MeasureKind::Thigh), |p| p.z);
+        design.sheet_assignments.push(SheetAssignment {
+            point: locate(mesh.positions(), mesh.triangles(), thigh),
+            sheet: "black".into(),
+        });
+        let g = build(&mesh, &design).unwrap();
+        let (plan, warnings) = material_plan(&mesh, &g, &design, &sheets).unwrap();
+        let plan = plan.unwrap();
+        assert_eq!(warnings.len(), 2, "{warnings:?}");
+        // Exactly the back panel (the one containing the back of the waist) is red.
+        let faces = panel_faces(&g).unwrap();
+        let gm = g.mesh.as_ref().unwrap();
+        let centre_z = |p: usize| {
+            faces[p]
+                .iter()
+                .map(|&f| {
+                    gm.triangles()[f as usize]
+                        .iter()
+                        .map(|&v| gm.positions()[v as usize].z)
+                        .sum::<f64>()
+                        / 3.0
+                })
+                .sum::<f64>()
+                / faces[p].len() as f64
+        };
+        for p in 0..faces.len() {
+            let is_back = centre_z(p) < centre_z(1 - p);
+            assert_eq!(plan.panel_sheet[p], usize::from(is_back), "panel {p}");
+        }
+        // Without a catalogue there is no plan.
+        assert!(material_plan(&mesh, &g, &design, &[]).unwrap().0.is_none());
+    }
+
+    #[test]
+    fn assembly_order_on_the_top() {
+        let (mesh, tapes) = body();
+        let design = top(&mesh, &tapes);
+        let g = build(&mesh, &design).unwrap();
+        let out = run(g.mesh.as_ref().unwrap(), &g.seams, &JobOptions::default()).unwrap();
+        let steps = &out.report.assembly;
+        // Cutting first; then one shoulder joins front and back (shortest
+        // seam), and the other shoulder and both sides close the garment.
+        assert!(steps[0].starts_with("Cut each piece"));
+        assert!(
+            steps[1].starts_with("Join pieces") && steps[1].contains("shoulder"),
+            "{}",
+            steps[1]
+        );
+        assert_eq!(
+            steps.iter().filter(|s| s.starts_with("Close")).count(),
+            3,
+            "{steps:#?}"
+        );
+        assert!(
+            steps[1].contains("6 mm lap") && steps[1].contains("match notches"),
+            "{}",
+            steps[1]
+        );
+    }
+
+    #[test]
+    fn curve_finishes_reach_the_pattern() {
+        use crate::pattern::EdgeFinish;
+        use crate::seams::SeamFinish;
+        let (mesh, tapes) = body();
+        let mut design = top(&mesh, &tapes);
+        for c in &mut design.curves {
+            match c.name.as_str() {
+                "neckline" => {
+                    c.edge_finish = Some(EdgeFinish::Trim {
+                        width_mm: 15.0,
+                        ease: 0.9,
+                    })
+                }
+                "hem" => c.edge_finish = Some(EdgeFinish::Hem { width_mm: 20.0 }),
+                "side" => c.seam_finish = SeamFinish::Zip,
+                _ => {}
+            }
+        }
+        let g = build(&mesh, &design).unwrap();
+        let names: Vec<&str> = g.edges.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, ["hem", "neckline"]);
+        let zips = g
+            .seams
+            .seams
+            .iter()
+            .filter(|s| s.finish == SeamFinish::Zip)
+            .count();
+        assert_eq!(zips, 2, "side and its mirror");
+        let opts = JobOptions {
+            edges: g.edges.clone(),
+            print: Some(Default::default()),
+            ..Default::default()
+        };
+        let out = run(g.mesh.as_ref().unwrap(), &g.seams, &opts).unwrap();
+        let r = &out.report;
+        assert_eq!(r.trims.len(), 1);
+        let t = &r.trims[0];
+        assert_eq!(t.edge, "neckline");
+        assert!((t.length_mm - 0.9 * t.edge_length_mm).abs() < 1e-9);
+        // The whole neckline, near the default ease (0.85) of its body length
+        // (the curved shoulders shorten the flat edge a little more).
+        let gm = g.mesh.as_ref().unwrap();
+        let neck = &g.edges[1].vertices;
+        let body_len: f64 = neck
+            .windows(2)
+            .map(|w| gm.positions()[w[0] as usize].distance(gm.positions()[w[1] as usize]))
+            .sum();
+        let ratio = t.edge_length_mm / body_len;
+        assert!(
+            (0.65..0.95).contains(&ratio),
+            "{} / {body_len}",
+            t.edge_length_mm
+        );
+        let all = r.assembly.join("\n");
+        assert!(all.contains("Fit the zip in the side"), "{all}");
+        assert!(all.contains("Hem the hem edge"), "{all}");
+        assert!(all.contains("Finish the neckline edge"), "{all}");
+        assert_eq!(out.trim_svgs.len(), 1);
+        let pdf = out.pdf.as_ref().unwrap();
+        assert!(pdf.starts_with("%PDF") && pdf.contains("Fit the zip in the side"));
+        assert!(pdf.contains("neckline trim  -  page A1"));
+        if let Ok(path) = std::env::var("LATEXPAT_WRITE_PDF") {
+            std::fs::write(path, pdf).unwrap();
+        }
+    }
+
+    #[test]
+    fn every_template_makes_its_pieces() {
+        use super::examples::TEMPLATES;
+        let (mesh, tapes) = body();
+        for (t, pieces) in TEMPLATES.iter().zip([2, 2, 4, 4]) {
+            let g = build(&mesh, &(t.build)(&mesh, &tapes)).unwrap();
+            assert!(g.warnings.is_empty(), "{}: {:?}", t.id, g.warnings);
+            let faces = panel_faces(&g).unwrap();
+            let sizes: Vec<usize> = faces.iter().map(|f| f.len()).collect();
+            assert_eq!(sizes.len(), pieces, "{}: piece sizes {sizes:?}", t.id);
+            // No slivers where seams meet.
+            assert!(sizes.iter().all(|&n| n > 100), "{}: {sizes:?}", t.id);
+        }
     }
 
     #[test]
