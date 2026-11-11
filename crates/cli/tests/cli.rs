@@ -60,7 +60,7 @@ fn reports_non_disc_panel() {
         .output()
         .unwrap();
     assert!(!o.status.success());
-    assert!(String::from_utf8_lossy(&o.stderr).contains("not a topological disc"));
+    assert!(String::from_utf8_lossy(&o.stderr).contains("cannot be laid flat: it still wraps around"));
 }
 
 #[test]
