@@ -1,5 +1,5 @@
 {
   "seams": [
-    { "name": "centre", "vertices": [5, 16, 27, 38, 49, 60, 71, 82, 93] }
+    { "name": "centre", "vertices": [5, 16, 27, 38, 49, 60, 71, 82, 93], "notches": [27] }
   ]
 }

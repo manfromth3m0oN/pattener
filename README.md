@@ -25,11 +25,25 @@ cargo run --release -p latexpat -- flatten body.obj --seams seams.json --ease 0.
 | `--no-seam-matching` | keep each panel's independent flattening |
 | `--seam-weight W` | strength of the seam-length constraints (default 10) |
 | `--seam-tolerance MM` | warn when a seam's sides still differ by more than this (default 1 mm) |
+| `--glue-allowance MM` | lap overlap added to one side of each seam (default 6 mm) |
+| `--allowance-side S` | `left` (default), `right`, `both` or `none`; seams can override |
+| `--hem-allowance MM` | allowance on open edges such as hems and necklines (default 0) |
+| `--notch-spacing MM` | body distance between automatic notches (default 50; 0 = explicit only) |
+| `--sheet-width MM` | lay all pieces out on a sheet this wide and write `layout.svg` |
+| `--sheet-gap MM` | gap between pieces on the sheet (default 5) |
+| `--no-rotate` | keep pieces upright on the sheet |
 
-Output: `out/panel_NN.svg` (1:1 scale in mm, with a 50 mm scale bar to check
-printing; each seam edge is labelled with the panel it joins) and
-`out/report.json` (per-panel stretch range, areas, flipped triangles; per-seam
-body and flat lengths before and after matching). Heatmap colours: blue = slack (σ < 1), white = unstretched,
+Output:
+- `out/panel_NN.svg`: 1:1 scale in mm with a 50 mm scale bar to check
+  printing. Solid line = cut line; dashed line = seam/glue line where the
+  piece carries an allowance. Numbered ticks are notches: each number
+  appears on exactly two pieces, at the same point of the body. Mark them
+  with a pen (snipping latex starts tears). Seam edges are labelled with the
+  panel they join.
+- `out/layout.svg` (with `--sheet-width`): all pieces on the sheet, and the
+  length of sheet needed.
+- `out/report.json`: per-panel stretch range, areas, flat and cut sizes,
+  notches; per-seam lengths before and after matching; layout placements. Heatmap colours: blue = slack (σ < 1), white = unstretched,
 orange = stretched (σ > 1).
 
 ### Seam file
@@ -39,8 +53,15 @@ in Blender). Consecutive vertices must share a mesh edge; repeat the first
 vertex to close a loop.
 
 ```json
-{ "seams": [ { "name": "side_left", "vertices": [12, 40, 41, 77] } ] }
+{ "seams": [ { "name": "side_left", "vertices": [12, 40, 41, 77],
+               "notches": [41], "allowance": "right" } ] }
 ```
+
+`notches` (optional) are seam vertices that get a numbered matching mark on
+both pieces, in addition to the automatic ones. `allowance` (optional)
+overrides `--allowance-side` for this seam. *Left* is the panel on the left
+when walking the seam in vertex order, seen from outside the body, so
+reversing a seam's vertex list moves its lap to the other piece.
 
 Every panel produced by the cut must be a topological disc; otherwise the
 tool reports which panel fails and why (Euler characteristic and number of
@@ -69,7 +90,13 @@ boundary loops), e.g. a tube needs one lengthwise seam.
    each round until the sides agree.
 6. `strain::measure`: deformation gradient `F = P Q⁻¹` of flat → body,
    principal stretches, flipped triangles.
-7. `flatten::orient` + `svg::panel_svg`: upright, minimum bounding-box
+7. `pattern::build_pattern`: per-edge glue allowance (lap seams: one side),
+   cut line via `allowance::offset_polygon`, and notches placed by body
+   arc length so both pieces mark the same body point.
+8. `nest::nest`: bottom-left skyline packing of the cut pieces on a
+   fixed-width sheet (rotation only, never mirrored, since latex has a
+   shiny and a matte face).
+9. `flatten::orient` + `svg::panel_svg` / `svg::layout_svg`: upright
    placement and SVG export.
 
 Each stage documents its formulas in rustdoc (`cargo doc --open -p latexpat-core`).
@@ -89,6 +116,7 @@ flatten to sides 3.1 mm apart; matching removes the gap edge by edge
 
 1. ✅ Cut, flatten (LSCM + ease-scaled ARAP), strain report, SVG.
 2. ✅ Seam-length matching between paired panel edges, with mismatch warnings.
-3. Glue-overlap allowance, notches, sheet-width nesting.
+3. ✅ Glue-overlap allowance, notches, sheet-width nesting (bounding-box
+   packing; polygon nesting later).
 4. Swatch calibration → per-sheet-thickness ease (`Ease::PerTriangle`).
 5. Parametric body from measurements; web UI via WASM.
