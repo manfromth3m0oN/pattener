@@ -277,3 +277,35 @@ fn body_from_measurements_then_flatten() {
     assert!(pat.join("panel_05.svg").exists() && !pat.join("panel_06.svg").exists());
     std::fs::remove_dir_all(&out).unwrap();
 }
+
+#[test]
+fn human_body_from_project() {
+    let out = std::env::temp_dir().join(format!("latexpat-cli-test-human-{}", std::process::id()));
+    let o = Command::new(env!("CARGO_BIN_EXE_latexpat"))
+        .arg("human")
+        .arg(data("project.json"))
+        .arg("-o")
+        .arg(&out)
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    assert!(
+        o.stderr.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    let m: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(out.join("measurements.json")).unwrap())
+            .unwrap();
+    let waist = m
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|x| x["kind"] == "waist")
+        .unwrap();
+    assert!((waist["value"].as_f64().unwrap() - 740.0).abs() < 1.0);
+    assert!(std::fs::read_to_string(out.join("body.obj"))
+        .unwrap()
+        .starts_with("v "));
+    std::fs::remove_dir_all(&out).unwrap();
+}

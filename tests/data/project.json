@@ -1,0 +1,13 @@
+{
+  "comment": "Example project: measurements in mm (not a real person).",
+  "version": 1,
+  "name": "Example",
+  "body": {
+    "measurements": {
+      "height": 1680, "inseam": 780, "arm_length": 560,
+      "neck": 330, "bust": 940, "underbust": 790, "waist": 740, "hips": 980,
+      "thigh": 570, "calf": 360, "ankle": 220, "upper_arm": 280, "wrist": 160
+    },
+    "shape": { "body_type": 0, "cup": 0.2 }
+  }
+}

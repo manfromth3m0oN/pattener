@@ -10,10 +10,12 @@ use latexpat_core::arap::ArapOptions;
 use latexpat_core::body::{torso, BodyMeasurements, BodyOptions, SeamStyle};
 use latexpat_core::calibrate::{calibrate, Calibration, CalibrationResult, SheetFit};
 use latexpat_core::glam::DVec3;
+use latexpat_core::human::{fit, BodyModel, Measurer};
 use latexpat_core::job::{self, EaseSpec, JobOptions, JobOutput, Report};
 use latexpat_core::nest::NestOptions;
 use latexpat_core::obj::{parse_obj, write_obj};
 use latexpat_core::pattern::PatternOptions;
+use latexpat_core::project::Project;
 use latexpat_core::seams::AllowanceSide;
 use latexpat_core::svg::HeatmapMetric;
 use latexpat_core::{SeamMatching, SeamSet};
@@ -41,6 +43,17 @@ enum Command {
     Calibrate(CalibrateArgs),
     /// Generate a torso mesh and seams from body measurements.
     Body(BodyArgs),
+    /// Fit the full body model to the measurements in a project file.
+    Human(HumanArgs),
+}
+
+#[derive(clap::Args)]
+struct HumanArgs {
+    /// Project file: {"body": {"measurements": {"height": 1680, ...}, "shape": {...}}}.
+    project: PathBuf,
+    /// Output directory (writes body.obj and measurements.json).
+    #[arg(short, long)]
+    output: PathBuf,
 }
 
 #[derive(clap::Args)]
@@ -210,7 +223,60 @@ fn main() -> Result<()> {
         Command::Flatten(args) => flatten(args),
         Command::Calibrate(args) => calibrate_cmd(args),
         Command::Body(args) => body_cmd(args),
+        Command::Human(args) => human_cmd(args),
     }
+}
+
+/// Fitted measurements more than this far (mm) from the request are flagged.
+const FIT_WARNING_MM: f64 = 5.0;
+
+fn human_cmd(args: HumanArgs) -> Result<()> {
+    let t = fs::read_to_string(&args.project)
+        .with_context(|| format!("reading {}", args.project.display()))?;
+    let project: Project =
+        serde_json::from_str(&t).with_context(|| format!("parsing {}", args.project.display()))?;
+    let model = BodyModel::bundled();
+    let measurer = Measurer::new(&model)?;
+    let b = fit(
+        &model,
+        &measurer,
+        &project.body.measurements,
+        &project.body.shape,
+    )?;
+    fs::create_dir_all(&args.output)
+        .with_context(|| format!("creating {}", args.output.display()))?;
+    write(&args.output.join("body.obj"), &write_obj(&b.mesh))?;
+    write(
+        &args.output.join("measurements.json"),
+        &serde_json::to_string_pretty(&b.measured)?,
+    )?;
+
+    println!("{:<14} {:>10} {:>10}", "measurement", "requested", "fitted");
+    for m in &b.measured {
+        let req = m
+            .requested
+            .map(|r| format!("{r:.1}"))
+            .unwrap_or_else(|| "-".into());
+        println!("{:<14} {:>10} {:>10.1}", m.kind.name(), req, m.value);
+    }
+    for m in &b.measured {
+        if let Some(r) = m.requested {
+            if (m.value - r).abs() > FIT_WARNING_MM {
+                eprintln!(
+                    "warning: {} fitted at {:.0} mm instead of {r:.0} mm; this combination is outside \
+                     what the body model can reach (check the measurement, or adjust the shape options)",
+                    m.kind.name(),
+                    m.value
+                );
+            }
+        }
+    }
+    println!(
+        "fitted in {} iteration(s); wrote {} and measurements.json",
+        b.iterations,
+        args.output.join("body.obj").display()
+    );
+    Ok(())
 }
 
 fn body_cmd(args: BodyArgs) -> Result<()> {

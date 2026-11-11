@@ -43,6 +43,7 @@ pub mod nest;
 pub mod obj;
 pub mod panel;
 pub mod pattern;
+pub mod project;
 pub mod seam_match;
 pub mod seams;
 pub mod strain;

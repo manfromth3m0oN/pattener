@@ -18,17 +18,21 @@
 //! { "command": "body", "measurements": {"levels": [...]}, "options": {"style": "princess"} }
 //! { "command": "pattern", "obj": "v ...", "seams": {"seams": [...]}, "scale": 1, "options": { ... } }
 //! { "command": "calibrate", "calibration": { "sheets": [...], "target": ... } }
+//! { "command": "human", "body": { "measurements": {"height": 1680, ...}, "shape": {...} } }
 //! ```
 //! `options` for `pattern` is a [`JobOptions`] (every field optional).
 //! Responses are `{"ok": true, ...}` or `{"ok": false, "error": "..."}`.
 
 use latexpat_core::body::{torso, BodyMeasurements, BodyOptions};
 use latexpat_core::calibrate::{calibrate, Calibration};
+use latexpat_core::human::{fit, BodyModel, Measurer};
 use latexpat_core::job::{self, JobOptions};
 use latexpat_core::obj::{parse_obj, write_obj};
+use latexpat_core::project::BodySpec;
 use latexpat_core::SeamSet;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::sync::OnceLock;
 
 #[derive(Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
@@ -51,6 +55,20 @@ enum Request {
     Calibrate {
         calibration: Calibration,
     },
+    Human {
+        #[serde(default)]
+        body: BodySpec,
+    },
+}
+
+/// The body model and measurer, loaded once.
+fn human() -> &'static (BodyModel, Measurer) {
+    static CELL: OnceLock<(BodyModel, Measurer)> = OnceLock::new();
+    CELL.get_or_init(|| {
+        let model = BodyModel::bundled();
+        let measurer = Measurer::new(&model).expect("bundled model has all measurement targets");
+        (model, measurer)
+    })
 }
 
 fn one() -> f64 {
@@ -86,6 +104,40 @@ fn run(request: &str) -> Result<Value, String> {
             mesh.scale(scale);
             let out = job::run(&mesh, &seams, &options).map_err(|e| e.to_string())?;
             Ok(json!({ "ok": true, "output": out }))
+        }
+        Request::Human { body } => {
+            let (model, measurer) = human();
+            let b =
+                fit(model, measurer, &body.measurements, &body.shape).map_err(|e| e.to_string())?;
+            // Flat arrays keep the response compact for the 3D viewer.
+            let positions: Vec<f32> = b
+                .mesh
+                .positions()
+                .iter()
+                .flat_map(|p| [p.x as f32, p.y as f32, p.z as f32])
+                .collect();
+            let triangles: Vec<u32> = b.mesh.triangles().iter().flatten().copied().collect();
+            let tapes: Vec<Value> = b
+                .tapes
+                .iter()
+                .map(|(k, pts)| {
+                    let flat: Vec<f32> = pts
+                        .iter()
+                        .flat_map(|p| [p.x as f32, p.y as f32, p.z as f32])
+                        .collect();
+                    json!({ "kind": k, "points": flat })
+                })
+                .collect();
+            Ok(json!({
+                "ok": true,
+                "positions": positions,
+                "triangles": triangles,
+                "measured": b.measured,
+                "tapes": tapes,
+                "parameters": b.parameters,
+                "iterations": b.iterations,
+                "obj": write_obj(&b.mesh),
+            }))
         }
         Request::Calibrate { calibration } => {
             let r = calibrate(&calibration).map_err(|e| e.to_string())?;
@@ -164,6 +216,30 @@ mod tests {
         assert_eq!(o["panel_svgs"].as_array().unwrap().len(), 2);
         assert!(o["layout_svg"].as_str().unwrap().starts_with("<?xml"));
         assert_eq!(o["report"]["panels"][0]["ease"], 0.8);
+    }
+
+    #[test]
+    fn human_body_fits_measurements() {
+        let r = parse(&handle(
+            r#"{"command": "human", "body": {"measurements": {"height": 1700, "waist": 720},
+                "shape": {"body_type": 0.2}}}"#,
+        ));
+        assert_eq!(
+            r["ok"],
+            true,
+            "{}",
+            &r.to_string()[..200.min(r.to_string().len())]
+        );
+        assert_eq!(r["positions"].as_array().unwrap().len(), 3 * 13380);
+        let measured = r["measured"].as_array().unwrap();
+        let waist = measured.iter().find(|m| m["kind"] == "waist").unwrap();
+        assert!((waist["value"].as_f64().unwrap() - 720.0).abs() < 1.0);
+        assert_eq!(waist["requested"], 720.0);
+        assert!(r["tapes"].as_array().unwrap().len() >= 10);
+        let bad = parse(&handle(
+            r#"{"command": "human", "body": {"measurements": {"elbow": 3}}}"#,
+        ));
+        assert_eq!(bad["ok"], false);
     }
 
     #[test]
