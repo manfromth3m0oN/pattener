@@ -18,6 +18,8 @@ cargo run --release -p latexpat -- flatten body.obj --seams seams.json --ease 0.
 |---|---|
 | `--seams FILE` | seam polylines (below); omit if the mesh is already a single disc |
 | `--ease S` | flat edge length = `S ×` body edge length (default 0.85) |
+| `--calibration FILE --sheet NAME` | take the ease from a swatch calibration instead (below); `NAME` may also be a thickness like `0.5mm` |
+| `--panel-sheet I=NAME` | make panel `I` from a different sheet (repeatable) |
 | `--scale K` | multiply mesh coordinates by `K` to get mm (10 for cm, 1000 for m) |
 | `--up AXIS` | body axis that points up the page: `x y z -x -y -z` (default `y`) |
 | `--heatmap M` | `none`, `max` (σ_max) or `area` (σ_min·σ_max) |
@@ -67,6 +69,44 @@ Every panel produced by the cut must be a topological disc; otherwise the
 tool reports which panel fails and why (Euler characteristic and number of
 boundary loops), e.g. a tube needs one lengthwise seam.
 
+## Swatch calibration
+
+Thicker latex pulls harder for the same stretch, so it needs less reduction.
+Instead of guessing the ease for each sheet, measure it:
+
+1. Cut a strip about 25 mm wide from each sheet and draw two marks 100 mm
+   apart.
+2. Hang a few known weights from it (e.g. 100, 200, 300 g) and measure the
+   distance between the marks each time.
+3. Note a fit you know you like, e.g. "0.40 mm at ease 0.85".
+
+```json
+{
+  "sheets": [
+    { "name": "0.40mm black", "thickness_mm": 0.40,
+      "samples": [ { "width_mm": 25, "gauge_mm": 100, "stretched_mm": 108.5, "mass_g": 100 },
+                   { "width_mm": 25, "gauge_mm": 100, "stretched_mm": 116.0, "mass_g": 200 } ] },
+    { "name": "0.60mm black", "thickness_mm": 0.60, "samples": [ ... ] }
+  ],
+  "target": { "reference": { "sheet": "0.40mm black", "ease": 0.85 } }
+}
+```
+
+Loads can be `mass_g` (hanging weights) or `load_n`. The target can instead
+be a wearing tension: `"target": { "tension_n_per_cm": 1.3 }`.
+
+```sh
+latexpat calibrate swatches.json --thickness 0.5
+latexpat flatten body.obj --seams seams.json -o out/ \
+  --calibration swatches.json --sheet "0.40mm black" --panel-sheet 3="0.60mm black"
+```
+
+The tool fits a neo-Hookean rubber model to each sheet (shear modulus μ),
+works out the wearing tension of the reference fit, and gives every sheet
+the ease that produces that same tension. Seams joining different sheets
+settle where the two tensions balance, nearer the thicker side.
+`tests/data/swatches.json` is a synthetic example, not real measurements.
+
 ## Layout
 
 - `crates/core` (`latexpat-core`): all geometry. No file I/O, no threads;
@@ -99,6 +139,10 @@ boundary loops), e.g. a tube needs one lengthwise seam.
 9. `flatten::orient` + `svg::panel_svg` / `svg::layout_svg`: upright
    placement and SVG export.
 
+`calibrate` (separate from the pipeline) fits swatch tests and returns the
+ease per sheet, which feeds step 4 via `Ease::per_panel`, and the stiffness
+`μt` per panel, which weights step 5.
+
 Each stage documents its formulas in rustdoc (`cargo doc --open -p latexpat-core`).
 
 ## Validation
@@ -118,5 +162,5 @@ flatten to sides 3.1 mm apart; matching removes the gap edge by edge
 2. ✅ Seam-length matching between paired panel edges, with mismatch warnings.
 3. ✅ Glue-overlap allowance, notches, sheet-width nesting (bounding-box
    packing; polygon nesting later).
-4. Swatch calibration → per-sheet-thickness ease (`Ease::PerTriangle`).
+4. ✅ Swatch calibration → per-sheet ease, stiffness-weighted seam matching.
 5. Parametric body from measurements; web UI via WASM.

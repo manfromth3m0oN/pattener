@@ -1,0 +1,83 @@
+{
+  "comment": "Synthetic example: generated from a neo-Hookean model (mu ~0.45 MPa) with measurement-like rounding, not real measurements. Replace with your own strip tests.",
+  "sheets": [
+    {
+      "name": "0.25mm black",
+      "thickness_mm": 0.25,
+      "samples": [
+        {
+          "width_mm": 25,
+          "gauge_mm": 100,
+          "stretched_mm": 107.0,
+          "mass_g": 50
+        },
+        {
+          "width_mm": 25,
+          "gauge_mm": 100,
+          "stretched_mm": 113.0,
+          "mass_g": 100
+        },
+        {
+          "width_mm": 25,
+          "gauge_mm": 100,
+          "stretched_mm": 130.5,
+          "mass_g": 200
+        }
+      ]
+    },
+    {
+      "name": "0.40mm black",
+      "thickness_mm": 0.4,
+      "samples": [
+        {
+          "width_mm": 25,
+          "gauge_mm": 100,
+          "stretched_mm": 108.5,
+          "mass_g": 100
+        },
+        {
+          "width_mm": 25,
+          "gauge_mm": 100,
+          "stretched_mm": 116.5,
+          "mass_g": 200
+        },
+        {
+          "width_mm": 25,
+          "gauge_mm": 100,
+          "stretched_mm": 127.0,
+          "mass_g": 300
+        }
+      ]
+    },
+    {
+      "name": "0.60mm black",
+      "thickness_mm": 0.6,
+      "samples": [
+        {
+          "width_mm": 25,
+          "gauge_mm": 100,
+          "stretched_mm": 108.0,
+          "mass_g": 150
+        },
+        {
+          "width_mm": 25,
+          "gauge_mm": 100,
+          "stretched_mm": 116.0,
+          "mass_g": 300
+        },
+        {
+          "width_mm": 25,
+          "gauge_mm": 100,
+          "stretched_mm": 130.0,
+          "mass_g": 500
+        }
+      ]
+    }
+  ],
+  "target": {
+    "reference": {
+      "sheet": "0.40mm black",
+      "ease": 0.85
+    }
+  }
+}
