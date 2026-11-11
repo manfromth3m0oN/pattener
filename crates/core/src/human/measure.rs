@@ -23,7 +23,7 @@
 //! People measure the waist at its narrowest and the hips, bust, thigh and
 //! calf at their fullest, wherever that falls. Those girths are therefore
 //! the minimum or maximum over a few parallel cuts in a window around the
-//! landmark (see [`Search`]). Each cut is a smooth function of the shape,
+//! landmark. Each cut is a smooth function of the shape,
 //! so the extreme is continuous. Cuts whose girth differs by more than
 //! about 12 % from the landmark's own are ignored: that is a cut that ran
 //! into the arms or the other leg.

@@ -1,6 +1,7 @@
 // Browser smoke test for the web UI (needs Playwright with Chromium).
 //   web/build.sh && python3 -m http.server -d web 8765 &
 //   node web/smoke-test.cjs http://localhost:8765/
+// Set PW_CHANNEL=chrome to use an installed Google Chrome.
 // Run from the repository root (it uploads files from tests/data).
 const { chromium } = require('playwright');
 const assert = require('assert');
@@ -11,7 +12,12 @@ const done = (p) => p.waitForFunction(
   null, { timeout: 60000 });
 
 (async () => {
-  const browser = await chromium.launch({ args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
+  // PW_CHANNEL=chrome uses an installed Google Chrome instead of
+  // Playwright's own Chromium (as in CI). SwiftShader gives WebGL without a GPU.
+  const browser = await chromium.launch({
+    channel: process.env.PW_CHANNEL || undefined,
+    args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'],
+  });
   const page = await browser.newPage();
   const errors = [];
   page.on('pageerror', (e) => errors.push(String(e)));
