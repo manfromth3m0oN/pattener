@@ -10,7 +10,7 @@ use latexpat_core::arap::ArapOptions;
 use latexpat_core::body::{torso, BodyMeasurements, BodyOptions, SeamStyle};
 use latexpat_core::calibrate::{calibrate, Calibration, CalibrationResult, SheetFit};
 use latexpat_core::fitmap::Material;
-use latexpat_core::garment::{build, zones_on};
+use latexpat_core::garment::{build, material_plan, zones_on};
 use latexpat_core::glam::DVec3;
 use latexpat_core::human::{along_body, fit, BodyModel, Measurer};
 use latexpat_core::job::{self, EaseSpec, JobOptions, JobOutput, Report};
@@ -396,6 +396,7 @@ fn flatten(args: FlattenArgs) -> Result<()> {
     if !(args.heatmap_range > 1.0) {
         bail!("--heatmap-range must be greater than 1");
     }
+    let mut materials = None;
     let (mesh, seams, source, up, along, zones) = match (&args.project, &args.mesh) {
         (Some(path), _) => {
             let t =
@@ -414,6 +415,13 @@ fn flatten(args: FlattenArgs) -> Result<()> {
             for w in &g.warnings {
                 eprintln!("warning: {w}");
             }
+            // Sheets from the project's catalogue, by the design's assignments.
+            let (plan, plan_warnings) =
+                material_plan(&body.mesh, &g, &project.garment, &project.materials)?;
+            for w in &plan_warnings {
+                eprintln!("warning: {w}");
+            }
+            materials = plan;
             let mesh = g.mesh.with_context(|| {
                 "the project's garment has no area yet: draw its edges and pick a point inside"
             })?;
@@ -518,6 +526,7 @@ fn flatten(args: FlattenArgs) -> Result<()> {
         length_relief: args.length_relief,
         along,
         ease_zones: zones,
+        materials,
         material: Material {
             thickness_mm: args.thickness,
             ..Default::default()
@@ -599,6 +608,30 @@ fn write_job(dir: &Path, mesh: &str, scale: f64, out: &JobOutput) -> Result<()> 
             l.sheet_width_mm,
             100.0 * l.utilisation,
             l.file
+        );
+    }
+    if !r.materials.is_empty() {
+        println!();
+        println!(
+            "{:<20} {:>6} {:>8} {:>11} {:>9} {:>6} {:>8}  pieces",
+            "sheet", "t (mm)", "roll", "length (m)", "area m²", "used", "cost"
+        );
+    }
+    for (u, svg) in r.materials.iter().zip(&out.material_layouts) {
+        write(&dir.join(&u.file), svg)?;
+        println!(
+            "{:<20} {:>6.2} {:>8.0} {:>11.2} {:>9.3} {:>5.0}% {:>8}  {:?} → {}",
+            u.sheet,
+            u.thickness_mm,
+            u.roll_width_mm,
+            u.length_mm / 1000.0,
+            u.pieces_area_m2,
+            100.0 * u.utilisation,
+            u.cost
+                .map(|c| format!("{c:.2}"))
+                .unwrap_or_else(|| "-".into()),
+            u.pieces,
+            u.file
         );
     }
     for w in &out.warnings {
