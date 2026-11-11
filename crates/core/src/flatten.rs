@@ -42,6 +42,10 @@ impl Default for FlattenOptions {
     }
 }
 
+/// Bounds on a corrected seam edge target, relative to the agreed length.
+const TARGET_MIN: f64 = 0.75;
+const TARGET_MAX: f64 = 1.33;
+
 /// Seam-length equalisation settings.
 ///
 /// For every paired seam edge with flat lengths `ℓ_L`, `ℓ_R` the agreed
@@ -54,7 +58,14 @@ impl Default for FlattenOptions {
 /// `t ← t + (ℓ* − ℓ)` (with `ℓ*` recomputed from the new lengths). A soft
 /// constraint alone settles short of its target because the panel pulls
 /// back; this integral-style update removes that residual, and its fixed
-/// point is `ℓ_L = ℓ_R`. Higher weights converge in fewer rounds but
+/// point is `ℓ_L = ℓ_R`. Targets are kept within 0.75–1.33 × `ℓ*` so an
+/// edge the panel cannot bend to its target (at a sharp corner, say) does
+/// not wind its target up without limit.
+///
+/// Matching never adds folds: if a round leaves any panel with more
+/// flipped triangles than it had unmatched, that round is discarded and
+/// matching stops, keeping the remaining mismatch (which is reported). Such
+/// a seam needs shaping, such as a dart or a princess line, or easing in. Higher weights converge in fewer rounds but
 /// distort the panel more next to the seam.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -238,6 +249,7 @@ pub fn flatten_garment(mesh: &Mesh, seams: &SeamSet, opts: &FlattenOptions) -> R
 
     if let Some(m) = opts.seam_matching {
         let edges = seam_edge_pairs(&pairs);
+        let baseline_flips: Vec<usize> = flat.iter().map(|fp| fp.strain.flipped.len()).collect();
         let k = |pi: usize| opts.panel_stiffness.as_ref().map_or(1.0, |v| v[pi]);
         let agreed = |(_, l, r): (usize, (usize, usize), (usize, usize)), ll: f64, lr: f64| {
             (k(l.0) * ll + k(r.0) * lr) / (k(l.0) + k(r.0))
@@ -274,8 +286,11 @@ pub fn flatten_garment(mesh: &Mesh, seams: &SeamSet, opts: &FlattenOptions) -> R
             if round > 0 {
                 for ((t, &(ll, lr)), &e) in targets.iter_mut().zip(&lengths).zip(&edges) {
                     let avg = agreed(e, ll, lr);
-                    t[0] += avg - ll;
-                    t[1] += avg - lr;
+                    // Anti-windup: an edge the panel cannot bend to its
+                    // target (e.g. at a sharp corner) must not drive the
+                    // target ever further away.
+                    t[0] = (t[0] + avg - ll).clamp(TARGET_MIN * avg, TARGET_MAX * avg);
+                    t[1] = (t[1] + avg - lr).clamp(TARGET_MIN * avg, TARGET_MAX * avg);
                 }
             }
             let mut per_panel: Vec<Vec<EdgeTarget>> = vec![Vec::new(); flat.len()];
@@ -290,18 +305,29 @@ pub fn flatten_garment(mesh: &Mesh, seams: &SeamSet, opts: &FlattenOptions) -> R
                     });
                 }
             }
-            flat = flat
-                .into_iter()
+            let next = flat
+                .iter()
                 .zip(&eases)
                 .zip(&per_panel)
                 .map(|((fp, e), t)| {
                     if t.is_empty() {
-                        Ok(fp)
+                        Ok(fp.clone())
                     } else {
-                        refine_panel(fp, e, &opts.arap, opts.up, t)
+                        refine_panel(fp.clone(), e, &opts.arap, opts.up, t)
                     }
                 })
                 .collect::<Result<Vec<_>>>()?;
+            // Never trade folds for equal seams: a seam the panels cannot
+            // match without folding keeps its remaining mismatch, which is
+            // then reported.
+            let folds = next
+                .iter()
+                .zip(&baseline_flips)
+                .any(|(fp, &b)| fp.strain.flipped.len() > b);
+            if folds {
+                break;
+            }
+            flat = next;
         }
     }
 
