@@ -9,8 +9,10 @@ use clap::{Parser, Subcommand, ValueEnum};
 use latexpat_core::arap::ArapOptions;
 use latexpat_core::glam::DVec3;
 use latexpat_core::obj::parse_obj;
-use latexpat_core::svg::{panel_svg, HeatmapMetric, SvgOptions};
-use latexpat_core::{flatten_garment, Ease, FlatPanel, FlattenOptions, SeamSet};
+use latexpat_core::svg::{panel_svg, EdgeLabel, HeatmapMetric, SvgOptions};
+use latexpat_core::{
+    flatten_garment, Ease, FlatPanel, FlattenOptions, SeamMatching, SeamReport, SeamSet,
+};
 use serde::Serialize;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -63,6 +65,15 @@ struct FlattenArgs {
     /// ARAP relative energy tolerance.
     #[arg(long, default_value_t = 1e-8)]
     tolerance: f64,
+    /// Do not equalise the flat lengths of the two sides of each seam.
+    #[arg(long)]
+    no_seam_matching: bool,
+    /// Weight of the seam-length constraints during matching.
+    #[arg(long, default_value_t = 10.0)]
+    seam_weight: f64,
+    /// Warn when the two sides of a seam differ by more than this (mm).
+    #[arg(long, default_value_t = 1.0)]
+    seam_tolerance: f64,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -106,6 +117,20 @@ struct Report {
     ease: f64,
     scale: f64,
     panels: Vec<PanelReport>,
+    seams: Vec<SeamPairReport>,
+}
+
+#[derive(Serialize)]
+struct SeamPairReport {
+    seam: String,
+    left_panel: usize,
+    right_panel: usize,
+    edges: usize,
+    body_length_mm: f64,
+    left_length_mm: f64,
+    right_length_mm: f64,
+    mismatch_mm: f64,
+    mismatch_before_matching_mm: f64,
 }
 
 #[derive(Serialize)]
@@ -162,8 +187,13 @@ fn flatten(args: FlattenArgs) -> Result<()> {
             tolerance: args.tolerance,
         },
         up: args.up.vec(),
+        seam_matching: (!args.no_seam_matching).then_some(SeamMatching {
+            weight: args.seam_weight,
+            ..Default::default()
+        }),
     };
-    let panels = flatten_garment(&mesh, &seams, &opts)?;
+    let garment = flatten_garment(&mesh, &seams, &opts)?;
+    let panels = &garment.panels;
 
     fs::create_dir_all(&args.output)
         .with_context(|| format!("creating {}", args.output.display()))?;
@@ -178,6 +208,7 @@ fn flatten(args: FlattenArgs) -> Result<()> {
         ease: args.ease,
         scale: args.scale,
         panels: vec![],
+        seams: vec![],
     };
     println!(
         "{:<10} {:>6} {:>9} {:>9} {:>9} {:>17}  seams",
@@ -197,6 +228,7 @@ fn flatten(args: FlattenArgs) -> Result<()> {
                 heatmap,
                 range: args.heatmap_range,
                 label: Some(label),
+                edge_labels: edge_labels(i, &garment.seams, &seams),
                 ..Default::default()
             },
         );
@@ -241,6 +273,47 @@ fn flatten(args: FlattenArgs) -> Result<()> {
             arap_iterations: fp.arap_iterations,
         });
     }
+    if !garment.seams.is_empty() {
+        println!();
+        println!(
+            "{:<16} {:>9} {:>9} {:>9} {:>9} {:>17}",
+            "seam", "panels", "body", "left", "right", "mismatch (mm)"
+        );
+    }
+    for sr in &garment.seams {
+        let (l, r) = (sr.pair.left.panel, sr.pair.right.panel);
+        let name = seam_name(&seams, sr.pair.seam);
+        println!(
+            "{:<16} {:>9} {:>9.1} {:>9.1} {:>9.1} {:>+8.2} (was {:+.2})",
+            name,
+            format!("{l}↔{r}"),
+            sr.lengths.body,
+            sr.lengths.left,
+            sr.lengths.right,
+            sr.lengths.mismatch(),
+            sr.unmatched.mismatch()
+        );
+        if sr.lengths.mismatch().abs() > args.seam_tolerance {
+            eprintln!(
+                "warning: seam '{name}' between panels {l} and {r}: sides differ by {:.2} mm \
+                 (tolerance {} mm); the longer side will need easing in",
+                sr.lengths.mismatch().abs(),
+                args.seam_tolerance
+            );
+        }
+        report.seams.push(SeamPairReport {
+            seam: name,
+            left_panel: l,
+            right_panel: r,
+            edges: sr.pair.left.edges.len(),
+            body_length_mm: sr.lengths.body,
+            left_length_mm: sr.lengths.left,
+            right_length_mm: sr.lengths.right,
+            mismatch_mm: sr.lengths.mismatch(),
+            mismatch_before_matching_mm: sr.unmatched.mismatch(),
+        });
+    }
+
     write(
         &args.output.join("report.json"),
         &serde_json::to_string_pretty(&report)?,
@@ -253,15 +326,42 @@ fn flatten(args: FlattenArgs) -> Result<()> {
     Ok(())
 }
 
+fn seam_name(seams: &SeamSet, id: u32) -> String {
+    seams.seams[id as usize]
+        .name
+        .clone()
+        .unwrap_or_else(|| format!("seam {id}"))
+}
+
+/// Labels for panel `panel`'s seam edges: "name ↔ panel N".
+fn edge_labels(panel: usize, pairs: &[SeamReport], seams: &SeamSet) -> Vec<EdgeLabel> {
+    let mut out = Vec::new();
+    for sr in pairs {
+        let name = seam_name(seams, sr.pair.seam);
+        let (l, r) = (&sr.pair.left, &sr.pair.right);
+        for (side, other) in [(l, r.panel), (r, l.panel)] {
+            if side.panel == panel {
+                let text = if other == panel {
+                    format!("{name} (joins itself)")
+                } else {
+                    format!("{name} ↔ panel {other}")
+                };
+                out.push(EdgeLabel {
+                    edges: side.edges.clone(),
+                    text,
+                });
+            }
+        }
+    }
+    out
+}
+
 /// Names of the seams on a panel's boundary, in loop order, deduplicated.
 fn seam_names(fp: &FlatPanel, seams: &SeamSet) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for e in &fp.panel.boundary {
         if let Some(id) = e.seam {
-            let name = seams.seams[id as usize]
-                .name
-                .clone()
-                .unwrap_or_else(|| format!("seam {id}"));
+            let name = seam_name(seams, id);
             if !out.contains(&name) {
                 out.push(name);
             }

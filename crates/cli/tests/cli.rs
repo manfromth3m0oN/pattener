@@ -62,3 +62,42 @@ fn reports_non_disc_panel() {
     assert!(!o.status.success());
     assert!(String::from_utf8_lossy(&o.stderr).contains("not a topological disc"));
 }
+
+#[test]
+fn seam_mismatch_is_matched_or_warned() {
+    let out = std::env::temp_dir().join(format!("latexpat-cli-test-ring-{}", std::process::id()));
+    let base = |extra: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_latexpat"))
+            .arg("flatten")
+            .arg(data("cap.obj"))
+            .arg("--seams")
+            .arg(data("cap.ring.seams.json"))
+            .args(["--up", "z", "-o"])
+            .arg(&out)
+            .args(extra)
+            .output()
+            .unwrap()
+    };
+
+    // Matching on (default): no warnings, report records before/after.
+    let o = base(&[]);
+    assert!(o.status.success());
+    assert!(
+        o.stderr.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    let report = std::fs::read_to_string(out.join("report.json")).unwrap();
+    assert!(
+        report.contains("\"seam\": \"ring\"") && report.contains("mismatch_before_matching_mm")
+    );
+    let svg = std::fs::read_to_string(out.join("panel_01.svg")).unwrap();
+    assert!(svg.contains("ring ↔ panel 0"));
+
+    // Matching off: the ring seam's ~3 mm mismatch triggers a warning.
+    let o = base(&["--no-seam-matching"]);
+    assert!(o.status.success());
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(err.contains("warning: seam 'ring'"), "{err}");
+    std::fs::remove_dir_all(&out).unwrap();
+}

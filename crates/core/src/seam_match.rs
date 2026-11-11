@@ -5,8 +5,8 @@
 //! latex shows up as puckers or ripples along the seam. Because every panel
 //! is flattened independently, the two sides of a seam generally come out
 //! with slightly different lengths; this module finds the pairs and
-//! measures the mismatch, and [`seam_targets`] provides the per-edge target
-//! lengths used to equalise them.
+//! measures the mismatch, and [`seam_edge_pairs`] lists the per-edge units
+//! that [`flatten_garment`](crate::flatten_garment) equalises.
 //!
 //! ## Pairing
 //! Each interior seam edge `(a, b)` of the input mesh becomes two directed
@@ -44,6 +44,9 @@ pub struct SeamPair {
     /// Side whose boundary runs against the seam's vertex order.
     pub right: SeamSide,
 }
+
+/// A panel boundary edge: `(panel index, index into its boundary)`.
+pub type EdgeRef = (usize, usize);
 
 /// Lengths of a seam pair in a flattened garment.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -170,7 +173,7 @@ pub fn seam_lengths(pair: &SeamPair, panels: &[FlatPanel]) -> SeamLengths {
 /// boundary index), (panel, boundary index))`. These are the units that seam matching
 /// equalises: matching edge by edge (not just total length) keeps
 /// positions along the seam aligned, so notches placed later line up.
-pub fn seam_edge_pairs(pairs: &[SeamPair]) -> Vec<(usize, (usize, usize), (usize, usize))> {
+pub fn seam_edge_pairs(pairs: &[SeamPair]) -> Vec<(usize, EdgeRef, EdgeRef)> {
     pairs
         .iter()
         .enumerate()
