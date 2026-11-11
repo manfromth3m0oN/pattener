@@ -180,6 +180,11 @@ struct FlattenArgs {
     /// flattened.
     #[arg(long, default_value_t = latexpat_core::flatten::DEFAULT_OUTLINE_SMOOTHING_MM)]
     smooth_outline: f64,
+    /// Smooth the body shape over about this scale σ (mm) before
+    /// flattening, so hollows and bumps latex bridges do not shape the
+    /// pattern; 0 flattens it as given.
+    #[arg(long, default_value_t = latexpat_core::flatten::DEFAULT_BODY_SMOOTHING_MM)]
+    smooth_body: f64,
     /// Strip on each side of a zip seam for the zip tape (mm).
     #[arg(long, default_value_t = 10.0)]
     zip_allowance: f64,
@@ -405,6 +410,7 @@ fn flatten(args: FlattenArgs) -> Result<()> {
         ("--hem-allowance", args.hem_allowance),
         ("--zip-allowance", args.zip_allowance),
         ("--smooth-outline", args.smooth_outline),
+        ("--smooth-body", args.smooth_body),
         ("--notch-spacing", args.notch_spacing),
         ("--sheet-gap", args.sheet_gap),
     ] {
@@ -563,6 +569,7 @@ fn flatten(args: FlattenArgs) -> Result<()> {
         edges,
         mirror,
         outline_smoothing_mm: args.smooth_outline,
+        body_smoothing_mm: args.smooth_body,
         print: args.pdf.map(|p| PrintOptions {
             paper: match p {
                 PaperArg::A4 => Paper::A4,

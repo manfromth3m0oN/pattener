@@ -108,6 +108,27 @@ Garments are **symmetric** by default:
 - **Keeping triangles in shape:** the inside of the piece is then flattened again with the outline held in place, so the stretch figures stay meaningful.
 - **Setting it:** `--smooth-outline MM`, or "Smooth outlines (mm)" in the web app; 0 turns it off.
 
+**Even triangles.** Cutting curves into the body leaves triangles of very
+mixed sizes and slivers where a curve passes close to a mesh vertex.
+Flattened, those cause kinks and meaningless stretch peaks, and they make
+seam matching give up early. So the garment area is re-triangulated
+evenly after the curves are cut in (Botsch–Kobbelt isotropic remeshing):
+- split long edges and collapse short ones;
+- flip edges towards Delaunay;
+- relax the inner points and project them back onto the body.
+
+The curves (and, for a symmetric build, the centre line) stay fixed. On
+the templates this cuts thin triangles by 3–9×. The top's maximum stretch
+drops from 21.7 to 2.0, and the catsuit's seams now match to within
+3 mm, where before they were up to 22 mm apart.
+
+**Body smoothing.** Latex spans hollows and small bumps (navel, collarbone
+hollows, nipples) instead of following them, so before flattening each
+piece's inside is smoothed over about **15 mm**: a Laplacian blur with
+twicing, so the large-scale shape is kept. Seams and outlines stay on the
+body. The pressure map still uses the real body. Set it with
+`--smooth-body MM` or "Smooth body (mm)"; 0 turns it off.
+
 ### Templates
 
 **Start from template** replaces the garment with one of these starting
@@ -222,6 +243,7 @@ cargo run --release -p latexpat -- flatten body.obj --seams seams.json --ease 0.
 | `--no-rotate` | keep pieces upright on the sheet |
 | `--zip-allowance MM` | strip on each side of a zip seam (default 10) |
 | `--smooth-outline MM` | smooth piece outlines over about this distance (default 10; 0 = off) |
+| `--smooth-body MM` | smooth the body shape inside each piece over about this distance before flattening (default 15; 0 = off) |
 | `--pdf PAPER` | also write `pattern.pdf`, tiled over `a4` or `letter` pages |
 
 Output:

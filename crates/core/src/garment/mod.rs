@@ -50,6 +50,7 @@
 
 pub mod edit;
 pub mod examples;
+mod remesh;
 
 use crate::error::{Error, Result};
 use crate::mesh::Mesh;
@@ -334,10 +335,11 @@ pub fn build(body: &Mesh, design: &GarmentDesign) -> Result<BuiltGarment> {
     } else {
         body_mirror(body)
     };
+    let inside = design.inside.and_then(|sp| sp.position(pos0, tri0));
     let (cut, paths, mirror) = match symmetric {
-        Some(body_mirror) => embed_symmetric(body, &body_mirror, &curves)?,
+        Some(body_mirror) => embed_symmetric(body, &body_mirror, &curves, inside)?,
         None => {
-            let (m, paths) = embed_both_sides(body, &curves)?;
+            let (m, paths) = embed_both_sides(body, &curves, inside)?;
             let cut = Mesh::new(m.positions.clone(), m.live_triangles()).map_err(|e| {
                 Error::Garment(format!("cutting the curves into the body failed: {e}"))
             })?;
@@ -648,6 +650,7 @@ fn embed_symmetric(
     body: &Mesh,
     body_mirror: &[u32],
     curves: &[Curve],
+    inside: Option<DVec3>,
 ) -> Result<(Mesh, Vec<CurvePath>, Option<Vec<u32>>)> {
     let (pos0, tri0) = (body.positions(), body.triangles());
     let mut positions = pos0.to_vec();
@@ -721,6 +724,9 @@ fn embed_symmetric(
         plan.push((c, HalfCurve::Runs(runs)));
     }
     cleanup(&mut m, &mut paths);
+    if let Some(p) = inside {
+        remesh::remesh_garment_area(&mut m, &mut paths, p, pos0, tri0, true);
+    }
 
     // Mirror the right half.
     let live = m.live_triangles();
@@ -903,7 +909,11 @@ fn midline_route(
 
 /// Embed each curve, and the mirror image of mirrored curves, into the
 /// full body.
-fn embed_both_sides(body: &Mesh, design_curves: &[Curve]) -> Result<(EditMesh, Vec<CurvePath>)> {
+fn embed_both_sides(
+    body: &Mesh,
+    design_curves: &[Curve],
+    inside: Option<DVec3>,
+) -> Result<(EditMesh, Vec<CurvePath>)> {
     let (pos0, tri0) = (body.positions(), body.triangles());
     let mut curves: Vec<Curve> = Vec::new();
     for c in design_curves {
@@ -943,6 +953,9 @@ fn embed_both_sides(body: &Mesh, design_curves: &[Curve]) -> Result<(EditMesh, V
         });
     }
     cleanup(&mut m, &mut paths);
+    if let Some(p) = inside {
+        remesh::remesh_garment_area(&mut m, &mut paths, p, pos0, tri0, false);
+    }
     Ok((m, paths))
 }
 
@@ -1690,8 +1703,29 @@ pub(crate) mod tests {
         for (t, pieces) in TEMPLATES.iter().zip([2, 2, 4, 4]) {
             let g = build(&mesh, &(t.build)(&mesh, &tapes)).unwrap();
             assert!(g.warnings.is_empty(), "{}: {:?}", t.id, g.warnings);
-            // Built symmetric: every garment vertex has a mirror image.
+            // Evenly triangulated: no slivers.
             let gm = g.mesh.as_ref().unwrap();
+            let angles: Vec<f64> = gm
+                .triangles()
+                .iter()
+                .map(|t| {
+                    let [a, b, c] = t.map(|i| gm.positions()[i as usize]);
+                    (b - a)
+                        .angle_between(c - a)
+                        .min((a - b).angle_between(c - b))
+                        .min((a - c).angle_between(b - c))
+                })
+                .collect();
+            let thin = angles.iter().filter(|&&x| x < 15f64.to_radians()).count();
+            // (Without re-triangulation 4–7 % are; what remains sits
+            // between curve vertices, which stay where they are.)
+            assert!(
+                thin * 60 < angles.len(),
+                "{}: {thin} of {} triangles have an angle under 15°",
+                t.id,
+                angles.len()
+            );
+            // Built symmetric: every garment vertex has a mirror image.
             let mirror = g.mirror.as_ref().expect("symmetric build");
             for (v, &w) in mirror.iter().enumerate() {
                 let (p, q) = (gm.positions()[v], gm.positions()[w as usize]);

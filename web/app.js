@@ -865,6 +865,7 @@ async function run() {
         zip_allowance: num('zip'),
       },
       outline_smoothing_mm: Math.max(0, num('smooth')),
+      body_smoothing_mm: Math.max(0, num('smooth-body')),
       print: $('paper').value ? { paper: $('paper').value } : null,
       heatmap: $('heatmap').value || null,
       length_relief: Math.max(0, Math.min(100, num('length-relief'))) / 100,

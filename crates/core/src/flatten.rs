@@ -40,6 +40,11 @@ pub struct FlattenOptions {
     /// exactly as flattened. Pattern jobs use
     /// [`DEFAULT_OUTLINE_SMOOTHING_MM`].
     pub outline_smoothing_mm: f64,
+    /// Smooth the body shape over this scale `σ` (mm; see
+    /// [`smoothing`](crate::smoothing)) before flattening, so details latex
+    /// bridges do not shape the pattern; 0 (the default here) flattens the
+    /// mesh as given. Pattern jobs use [`DEFAULT_BODY_SMOOTHING_MM`].
+    pub body_smoothing_mm: f64,
     /// Mirror image of each input-mesh vertex, for an exactly symmetric
     /// garment: mirror-image pieces then come out as exact mirror images.
     pub mirror: Option<Vec<u32>>,
@@ -56,6 +61,7 @@ impl Default for FlattenOptions {
             length_relief: 1.0,
             along: None,
             outline_smoothing_mm: 0.0,
+            body_smoothing_mm: 0.0,
             mirror: None,
         }
     }
@@ -128,6 +134,9 @@ pub struct Garment {
     /// symmetric panel on the centre line), for a symmetric garment.
     pub mirrored: Vec<Option<usize>>,
 }
+
+/// Body smoothing scale `σ` (mm) used by pattern jobs by default.
+pub const DEFAULT_BODY_SMOOTHING_MM: f64 = 15.0;
 
 /// Outline smoothing scale `σ` (mm) used by pattern jobs by default.
 pub const DEFAULT_OUTLINE_SMOOTHING_MM: f64 = 10.0;
@@ -249,6 +258,27 @@ pub fn refine_panel(
 /// Cut `mesh` along `seams`, flatten every panel and, if enabled, equalise
 /// the lengths of paired seam edges.
 pub fn flatten_garment(mesh: &Mesh, seams: &SeamSet, opts: &FlattenOptions) -> Result<Garment> {
+    let smoothed;
+    let mesh = if opts.body_smoothing_mm > 0.0 {
+        // Seams and the outline stay where they are on the body.
+        let mut fixed = vec![false; mesh.positions().len()];
+        for e in mesh.edges().iter().filter(|e| e.is_boundary()) {
+            for v in e.v {
+                fixed[v as usize] = true;
+            }
+        }
+        for s in &seams.seams {
+            for &v in &s.vertices {
+                if let Some(f) = fixed.get_mut(v as usize) {
+                    *f = true;
+                }
+            }
+        }
+        smoothed = crate::smoothing::smooth(mesh, opts.body_smoothing_mm, &fixed);
+        &smoothed
+    } else {
+        mesh
+    };
     let panels = cut_panels(mesh, &seams.resolve(mesh)?)?;
     if let Some(k) = &opts.panel_stiffness {
         if k.len() != panels.len() || k.iter().any(|v| !(v.is_finite() && *v > 0.0)) {

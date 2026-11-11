@@ -86,6 +86,9 @@ pub struct JobOptions {
     /// Outline smoothing scale `σ` (mm; see [`crate::outline`]); 0 keeps
     /// outlines as flattened.
     pub outline_smoothing_mm: f64,
+    /// Smooth the body shape over this scale `σ` (mm; see
+    /// [`crate::smoothing`]) before flattening; 0 flattens it as given.
+    pub body_smoothing_mm: f64,
     /// Mirror image of each mesh vertex for a symmetric garment (from
     /// [`garment::build`](crate::garment::build)): mirror-image pieces
     /// come out as exact mirror images.
@@ -113,6 +116,7 @@ impl Default for JobOptions {
             edges: Vec::new(),
             print: None,
             outline_smoothing_mm: crate::flatten::DEFAULT_OUTLINE_SMOOTHING_MM,
+            body_smoothing_mm: crate::flatten::DEFAULT_BODY_SMOOTHING_MM,
             mirror: None,
         }
     }
@@ -336,6 +340,7 @@ pub fn run(mesh: &Mesh, seams: &SeamSet, opts: &JobOptions) -> Result<JobOutput>
         length_relief: opts.length_relief,
         along: opts.along.clone(),
         outline_smoothing_mm: opts.outline_smoothing_mm,
+        body_smoothing_mm: opts.body_smoothing_mm,
         mirror: opts.mirror.clone(),
     };
     let garment = flatten_garment(mesh, seams, &fopts)?;

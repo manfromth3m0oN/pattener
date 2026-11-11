@@ -52,6 +52,7 @@ pub mod pdf;
 pub mod project;
 pub mod seam_match;
 pub mod seams;
+pub mod smoothing;
 pub mod strain;
 pub mod svg;
 pub mod testmesh;
