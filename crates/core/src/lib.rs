@@ -33,6 +33,7 @@ pub mod calibrate;
 pub mod cut;
 pub mod ease;
 pub mod error;
+pub mod fitmap;
 pub mod flatten;
 pub mod garment;
 pub mod human;
