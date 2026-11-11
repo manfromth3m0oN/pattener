@@ -80,6 +80,10 @@ pub enum Error {
         sheet_width: f64,
     },
 
+    /// A latex sheet or material plan is invalid.
+    #[error("materials: {0}")]
+    Material(String),
+
     /// A garment design cannot be built.
     #[error("garment: {0}")]
     Garment(String),

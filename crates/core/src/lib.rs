@@ -40,6 +40,7 @@ pub mod human;
 pub mod job;
 pub mod linalg;
 pub mod lscm;
+pub mod materials;
 pub mod mesh;
 pub mod nest;
 pub mod obj;

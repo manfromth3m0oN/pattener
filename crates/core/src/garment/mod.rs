@@ -115,7 +115,15 @@ pub struct DesignZone {
     pub mirror: bool,
 }
 
-/// A garment: curves, a point inside it, and ease zones.
+/// "The piece containing this point is cut from this sheet."
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct SheetAssignment {
+    pub point: SurfacePoint,
+    pub sheet: String,
+}
+
+/// A garment: curves, a point inside it, ease zones and sheets.
 #[derive(Debug, Clone, PartialEq, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(default))]
@@ -124,6 +132,89 @@ pub struct GarmentDesign {
     /// A point on the body inside the garment.
     pub inside: Option<SurfacePoint>,
     pub zones: Vec<DesignZone>,
+    /// Sheet for pieces without an assignment (default: the first sheet).
+    pub default_sheet: Option<String>,
+    /// Pieces cut from other sheets, chosen by a point on them. Points,
+    /// not panel numbers, so assignments survive changes to the seams.
+    pub sheet_assignments: Vec<SheetAssignment>,
+}
+
+/// Per panel of a built garment (in cut order), its triangles as indices
+/// into the garment mesh.
+pub fn panel_faces(g: &BuiltGarment) -> Result<Vec<Vec<u32>>> {
+    let Some(mesh) = &g.mesh else {
+        return Ok(Vec::new());
+    };
+    let panels = crate::cut::cut_panels(mesh, &g.seams.resolve(mesh)?)?;
+    Ok(panels.into_iter().map(|p| p.face_origin).collect())
+}
+
+/// Resolve the design's sheets on a built garment: each panel gets the
+/// default sheet, then each assignment sets the sheet of the panel nearest
+/// its point (later assignments win). `body` is the fitted body the design
+/// was built on; `sheets` the project's catalogue. Returns `None` without
+/// sheets, plus warnings for assignments that miss the garment or name an
+/// unknown sheet.
+pub fn material_plan(
+    body: &Mesh,
+    g: &BuiltGarment,
+    design: &GarmentDesign,
+    sheets: &[crate::materials::Sheet],
+) -> Result<(Option<crate::materials::MaterialPlan>, Vec<String>)> {
+    let mut warnings = Vec::new();
+    let (Some(mesh), false) = (&g.mesh, sheets.is_empty()) else {
+        return Ok((None, warnings));
+    };
+    let index = |name: &str| sheets.iter().position(|s| s.name == name);
+    let default = match &design.default_sheet {
+        Some(n) => index(n).ok_or_else(|| {
+            Error::Material(format!("default sheet '{n}' is not in the catalogue"))
+        })?,
+        None => 0,
+    };
+    let faces = panel_faces(g)?;
+    let mut face_panel = vec![usize::MAX; mesh.triangles().len()];
+    for (p, fs) in faces.iter().enumerate() {
+        for &f in fs {
+            face_panel[f as usize] = p;
+        }
+    }
+    let mut panel_sheet = vec![default; faces.len()];
+    for a in &design.sheet_assignments {
+        let Some(si) = index(&a.sheet) else {
+            warnings.push(format!(
+                "sheet '{}' is not in the catalogue; its assignment is ignored",
+                a.sheet
+            ));
+            continue;
+        };
+        let Some(p) = a.point.position(body.positions(), body.triangles()) else {
+            warnings.push(format!(
+                "an assignment of sheet '{}' is off the body",
+                a.sheet
+            ));
+            continue;
+        };
+        let sp = locate(mesh.positions(), mesh.triangles(), p);
+        let q = sp
+            .position(mesh.positions(), mesh.triangles())
+            .expect("located on mesh");
+        if q.distance(p) > 10.0 {
+            warnings.push(format!(
+                "an assignment of sheet '{}' is not on the garment; it is ignored",
+                a.sheet
+            ));
+            continue;
+        }
+        panel_sheet[face_panel[sp.face as usize]] = si;
+    }
+    Ok((
+        Some(crate::materials::MaterialPlan {
+            sheets: sheets.to_vec(),
+            panel_sheet,
+        }),
+        warnings,
+    ))
 }
 
 /// The design's ease zones placed on `body` (which has the body model's
@@ -928,6 +1019,64 @@ pub(crate) mod tests {
         };
         let (before, after) = (near(&plain), near(&loose));
         assert!(after < 0.5 * before, "{before} -> {after}");
+    }
+
+    #[test]
+    fn sheet_assignments_follow_points() {
+        use crate::materials::Sheet;
+        let (mesh, tapes) = body();
+        let mut design = top(&mesh, &tapes);
+        let sheet = |name: &str, color: &str| Sheet {
+            name: name.into(),
+            color: color.into(),
+            thickness_mm: 0.4,
+            roll_width_mm: 1000.0,
+            ease: None,
+            shear_modulus_mpa: None,
+            price_per_m: None,
+        };
+        let sheets = vec![sheet("black", "#111111"), sheet("red", "#b01020")];
+        let back = extreme(tape(&tapes, MeasureKind::Waist), |p| -p.z);
+        design.sheet_assignments.push(SheetAssignment {
+            point: locate(mesh.positions(), mesh.triangles(), back),
+            sheet: "red".into(),
+        });
+        // Unknown sheet, and a point off the garment (on the thigh).
+        design.sheet_assignments.push(SheetAssignment {
+            point: locate(mesh.positions(), mesh.triangles(), back),
+            sheet: "gold".into(),
+        });
+        let thigh = extreme(tape(&tapes, MeasureKind::Thigh), |p| p.z);
+        design.sheet_assignments.push(SheetAssignment {
+            point: locate(mesh.positions(), mesh.triangles(), thigh),
+            sheet: "black".into(),
+        });
+        let g = build(&mesh, &design).unwrap();
+        let (plan, warnings) = material_plan(&mesh, &g, &design, &sheets).unwrap();
+        let plan = plan.unwrap();
+        assert_eq!(warnings.len(), 2, "{warnings:?}");
+        // Exactly the back panel (the one containing the back of the waist) is red.
+        let faces = panel_faces(&g).unwrap();
+        let gm = g.mesh.as_ref().unwrap();
+        let centre_z = |p: usize| {
+            faces[p]
+                .iter()
+                .map(|&f| {
+                    gm.triangles()[f as usize]
+                        .iter()
+                        .map(|&v| gm.positions()[v as usize].z)
+                        .sum::<f64>()
+                        / 3.0
+                })
+                .sum::<f64>()
+                / faces[p].len() as f64
+        };
+        for p in 0..faces.len() {
+            let is_back = centre_z(p) < centre_z(1 - p);
+            assert_eq!(plan.panel_sheet[p], usize::from(is_back), "panel {p}");
+        }
+        // Without a catalogue there is no plan.
+        assert!(material_plan(&mesh, &g, &design, &[]).unwrap().0.is_none());
     }
 
     #[test]

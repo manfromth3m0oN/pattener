@@ -91,6 +91,6 @@ pub fn top(mesh: &Mesh, tapes: &[(MeasureKind, Vec<DVec3>)]) -> GarmentDesign {
             ),
         ],
         inside: Some(at(extreme(tape(tapes, Waist), |p| p.z))),
-        zones: Vec::new(),
+        ..Default::default()
     }
 }
