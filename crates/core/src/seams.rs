@@ -6,14 +6,38 @@
 //!
 //! JSON form (with the `serde` feature):
 //! ```json
-//! { "seams": [ { "name": "side_left", "vertices": [12, 40, 41, 77] } ] }
+//! { "seams": [ { "name": "side_left", "vertices": [12, 40, 41, 77],
+//!                "notches": [41], "allowance": "left" } ] }
 //! ```
+//!
+//! `notches` (optional) lists seam vertices that get a matching mark on
+//! both pieces. `allowance` (optional) overrides which side of the seam gets
+//! the glue overlap: the *left* side is the panel on the left when walking
+//! the seam in vertex order (looking at the outside of the body).
 
 use crate::error::{Error, Result};
 use crate::mesh::{EdgeId, Mesh};
 
 /// Index of a seam in a [`SeamSet`].
 pub type SeamId = u32;
+
+/// Which side(s) of a seam get the glue-overlap allowance.
+///
+/// Latex seams are usually lap seams: one piece is cut with an extra strip
+/// that is glued *under* the other, which is cut on the seam line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "lowercase"))]
+pub enum AllowanceSide {
+    /// The panel on the left of the seam direction.
+    Left,
+    /// The panel on the right of the seam direction.
+    Right,
+    /// Both panels (e.g. butt seams backed with a tape).
+    Both,
+    /// Neither.
+    None,
+}
 
 /// One seam polyline.
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -27,6 +51,18 @@ pub struct Seam {
     pub name: Option<String>,
     /// Vertex path; consecutive vertices must share a mesh edge.
     pub vertices: Vec<u32>,
+    /// Vertices on this seam that get a matching notch on both sides.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Vec::is_empty")
+    )]
+    pub notches: Vec<u32>,
+    /// Per-seam override of the allowance side.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub allowance: Option<AllowanceSide>,
 }
 
 /// All seams of a garment.
@@ -46,6 +82,9 @@ impl SeamSet {
         for (s, seam) in self.seams.iter().enumerate() {
             if seam.vertices.len() < 2 {
                 return Err(Error::SeamTooShort { seam: s });
+            }
+            if let Some(&v) = seam.notches.iter().find(|v| !seam.vertices.contains(v)) {
+                return Err(Error::NotchNotOnSeam { seam: s, vertex: v });
             }
             for w in seam.vertices.windows(2) {
                 let e: EdgeId = mesh.find_edge(w[0], w[1]).ok_or(Error::SeamNotAnEdge {
@@ -74,18 +113,30 @@ mod tests {
         .unwrap();
         let set = SeamSet {
             seams: vec![Seam {
-                name: None,
                 vertices: vec![0, 2],
+                ..Default::default()
             }],
         };
         let cut = set.resolve(&m).unwrap();
         assert_eq!(cut[m.find_edge(0, 2).unwrap() as usize], Some(0));
         assert_eq!(cut.iter().flatten().count(), 1);
 
+        let notch = SeamSet {
+            seams: vec![Seam {
+                vertices: vec![0, 2],
+                notches: vec![1],
+                ..Default::default()
+            }],
+        };
+        assert_eq!(
+            notch.resolve(&m).unwrap_err(),
+            Error::NotchNotOnSeam { seam: 0, vertex: 1 }
+        );
+
         let bad = SeamSet {
             seams: vec![Seam {
-                name: None,
                 vertices: vec![1, 3],
+                ..Default::default()
             }],
         };
         assert_eq!(

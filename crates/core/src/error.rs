@@ -39,6 +39,10 @@ pub enum Error {
     #[error("seam {seam}: vertices {a} and {b} are not joined by a mesh edge")]
     SeamNotAnEdge { seam: usize, a: u32, b: u32 },
 
+    /// A notch vertex is not on its seam.
+    #[error("seam {seam}: notch vertex {vertex} is not on the seam")]
+    NotchNotOnSeam { seam: usize, vertex: u32 },
+
     /// A panel produced by cutting is not a topological disc.
     #[error(
         "panel {panel} is not a topological disc (Euler characteristic {euler_characteristic}, \
