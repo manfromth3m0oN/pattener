@@ -11,16 +11,20 @@
 //!
 //! Pipeline:
 //! 1. [`obj::parse_obj`] → [`Mesh`]
-//! 2. [`SeamSet::resolve`] marks cut edges
+//! 2. [`SeamSet::resolve`] + [`cut::cut_panels`] → [`Panel`]s (topological discs)
 //!
 //! This crate does no file I/O and spawns no threads, so it can be
 //! compiled to WebAssembly.
 
+pub mod cut;
 pub mod error;
 pub mod mesh;
 pub mod obj;
+pub mod panel;
 pub mod seams;
+pub mod testmesh;
 
 pub use error::{Error, Result};
 pub use mesh::Mesh;
+pub use panel::{BoundaryEdge, Panel};
 pub use seams::{Seam, SeamId, SeamSet};
