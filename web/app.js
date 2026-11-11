@@ -289,6 +289,52 @@ if (viewer) {
     changed();
   };
 }
+// Dragging: press on a point of the selected curve (or the inside point)
+// and move it along the body; the garment updates when it is released.
+let dragging = null;   // { set(sp) }
+function hitAt(e) {
+  const hit = Viewer.intersect(viewer.ray(e), baseMesh.positions, baseMesh.triangles);
+  return hit && { face: hit.face, u: hit.u, v: hit.v, t: hit.t };
+}
+if (viewer) {
+  viewer.onPress = (e) => {
+    if (!baseMesh) return false;
+    const r = $('viewer').getBoundingClientRect();
+    const px = e.clientX - r.left, py = e.clientY - r.top;
+    const c = design.curves[active];
+    const targets = [];
+    if (c) c.points.forEach((p, i) => targets.push({ sp: p, set: (sp) => { c.points[i] = sp; } }));
+    if (design.inside) targets.push({ sp: design.inside, set: (sp) => { design.inside = sp; } });
+    // Only points facing the camera: the body hit under the pointer must
+    // be near the point itself.
+    const hit = hitAt(e);
+    if (!hit) return false;
+    const under = pointOf(hit);
+    let best = null;
+    for (const t of targets) {
+      const q = pointOf(t.sp), s = viewer.project(q);
+      if (!s) continue;
+      const d = Math.hypot(s.x - px, s.y - py);
+      const near = Math.hypot(q[0] - under[0], q[1] - under[1], q[2] - under[2]) < 40;
+      if (d < 10 && near && (!best || d < best.d)) best = { d, t };
+    }
+    if (!best) return false;
+    dragging = best.t;
+    return true;
+  };
+  viewer.onDrag = (e) => {
+    const hit = dragging && hitAt(e);
+    if (!hit) return;
+    dragging.set({ face: hit.face, u: hit.u, v: hit.v });
+    drawMarks();
+  };
+  viewer.onDragEnd = () => {
+    if (!dragging) return;
+    dragging = null;
+    changed();
+  };
+}
+
 $('g-new-edge').onclick = () => newCurve('edge');
 $('g-new-seam').onclick = () => newCurve('seam');
 $('g-inside').onclick = () => setPicking(picking === 'inside' ? 'add' : 'inside');
@@ -479,8 +525,8 @@ function show(output, extraFiles) {
   if (output.layout_svg) dl.appendChild(fileLink('layout.svg', output.layout_svg, 'image/svg+xml'));
   dl.appendChild(fileLink('report.json', JSON.stringify(r, null, 2), 'application/json'));
 
-  table($('panel-table'), ['panel', 'ease', 'min σ', 'max σ', 'cut size (mm)', 'seams'],
-    r.panels.map((p) => [p.index, f(p.ease, 3), f(p.min_stretch, 3), f(p.max_stretch, 3),
+  table($('panel-table'), ['panel', 'ease', 'min σ', '95 % under', 'max σ', 'cut size (mm)', 'seams'],
+    r.panels.map((p) => [p.index, f(p.ease, 3), f(p.min_stretch, 3), f(p.p95_stretch, 3), f(p.max_stretch, 3),
       `${f(p.cut_width_mm)} × ${f(p.cut_height_mm)}`, p.seams.join(', ')]));
   table($('seam-table'), ['seam', 'panels', 'body (mm)', 'flat (mm)', 'mismatch (mm)', 'before matching'],
     r.seams.map((s) => [s.seam, `${s.left_panel}↔${s.right_panel}`, f(s.body_length_mm),

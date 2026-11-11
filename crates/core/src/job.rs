@@ -87,6 +87,8 @@ pub struct PanelReport {
     pub triangles: usize,
     pub min_stretch: f64,
     pub max_stretch: f64,
+    /// 95 % of the piece's area stretches less than this.
+    pub p95_stretch: f64,
     pub mean_area_stretch: f64,
     pub body_area_mm2: f64,
     pub flat_area_mm2: f64,
@@ -271,6 +273,7 @@ pub fn run(mesh: &Mesh, seams: &SeamSet, opts: &JobOptions) -> Result<JobOutput>
             triangles: fp.panel.triangles.len(),
             min_stretch: s.min_stretch,
             max_stretch: s.max_stretch,
+            p95_stretch: s.p95_stretch,
             mean_area_stretch: s.mean_area_stretch,
             body_area_mm2: s.body_area,
             flat_area_mm2: s.flat_area,

@@ -39,20 +39,36 @@ class Viewer {
     };
 
     this.onClick = null;
-    let drag = null, travelled = 0;
+    // onPress(e) may return true to claim a drag (then onDrag / onDragEnd
+    // get the pointer events instead of orbiting the view).
+    this.onPress = null;
+    this.onDrag = null;
+    this.onDragEnd = null;
+    let drag = null, travelled = 0, claimed = false;
     canvas.addEventListener('pointerdown', (e) => {
       drag = [e.clientX, e.clientY];
       travelled = 0;
+      claimed = !!(this.onPress && this.onPress(e));
       canvas.setPointerCapture(e.pointerId);
     });
     canvas.addEventListener('pointerup', (e) => {
-      // A click (not a drag) picks a point on the surface.
-      if (drag && travelled < 5 && this.onClick) this.onClick(e);
+      if (claimed) {
+        if (this.onDragEnd) this.onDragEnd(e);
+      } else if (drag && travelled < 5 && this.onClick) {
+        // A click (not a drag) picks a point on the surface.
+        this.onClick(e);
+      }
       drag = null;
+      claimed = false;
     });
     canvas.addEventListener('pointermove', (e) => {
       if (!drag) return;
       travelled += Math.abs(e.clientX - drag[0]) + Math.abs(e.clientY - drag[1]);
+      if (claimed) {
+        if (this.onDrag) this.onDrag(e);
+        drag = [e.clientX, e.clientY];
+        return;
+      }
       this.yaw += (e.clientX - drag[0]) * 0.01;
       this.pitch = Math.max(-1.4, Math.min(1.4, this.pitch + (e.clientY - drag[1]) * 0.01));
       drag = [e.clientX, e.clientY];
@@ -139,6 +155,17 @@ class Viewer {
     this.draw();
   }
 
+  // Screen position (CSS px, relative to the canvas) of a 3D point.
+  project(p) {
+    const m = this.mvp, r = this.canvas.getBoundingClientRect();
+    if (!m) return null;
+    const x = m[0] * p[0] + m[4] * p[1] + m[8] * p[2] + m[12];
+    const y = m[1] * p[0] + m[5] * p[1] + m[9] * p[2] + m[13];
+    const w = m[3] * p[0] + m[7] * p[1] + m[11] * p[2] + m[15];
+    if (w <= 0) return null;
+    return { x: (x / w + 1) / 2 * r.width, y: (1 - y / w) / 2 * r.height };
+  }
+
   // Ray from the camera through a pointer event: { origin, dir }.
   ray(e) {
     const r = this.canvas.getBoundingClientRect();
@@ -221,7 +248,8 @@ class Viewer {
     const proj = perspective(FOVY, w / h, dist * 0.05, dist * 4);
     const view = lookAt(eye, this.center, [0, 1, 0]);
     this.camera = { eye, ...basis(eye, this.center, [0, 1, 0]) };
-    gl.uniformMatrix4fv(this.loc.mvp, false, mul(proj, view));
+    this.mvp = mul(proj, view);
+    gl.uniformMatrix4fv(this.loc.mvp, false, this.mvp);
     gl.uniformMatrix4fv(this.loc.model, false, [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
 
     // Body, pushed back slightly so lines on its surface stay visible.
