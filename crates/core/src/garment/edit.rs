@@ -117,6 +117,9 @@ pub struct EditMesh {
     pub positions: Vec<DVec3>,
     pub triangles: Vec<[u32; 3]>,
     vertex_faces: Vec<Vec<u32>>,
+    /// Keep vertices on the midplane `x = 0` there (see
+    /// [`EditMesh::pinned`]).
+    pub keep_midline: bool,
 }
 
 impl EditMesh {
@@ -131,7 +134,14 @@ impl EditMesh {
             positions,
             triangles,
             vertex_faces,
+            keep_midline: false,
         }
+    }
+
+    /// With [`EditMesh::keep_midline`], vertices on the plane `x = 0` stay
+    /// exactly on it: they are never moved, relaxed or collapsed away.
+    pub fn pinned(&self, v: u32) -> bool {
+        self.keep_midline && self.positions[v as usize].x == 0.0
     }
 
     /// Faces using vertex `v`.
@@ -240,7 +250,7 @@ impl EditMesh {
         n
     }
 
-    fn face_normal(&self, t: [u32; 3]) -> DVec3 {
+    pub(crate) fn face_normal(&self, t: [u32; 3]) -> DVec3 {
         let [a, b, c] = t.map(|i| self.positions[i as usize]);
         (b - a).cross(c - a)
     }
@@ -251,6 +261,9 @@ impl EditMesh {
     /// opposite vertices) or a face around `a` would flip. Removed faces
     /// become `[u32::MAX; 3]`; see [`EditMesh::live_triangles`].
     pub fn collapse(&mut self, a: u32, b: u32) -> bool {
+        if self.pinned(a) && !self.pinned(b) {
+            return false;
+        }
         let shared = self.edge_faces(a, b);
         if shared.len() != 2 {
             return false;
@@ -299,6 +312,50 @@ impl EditMesh {
         true
     }
 
+    /// Replace edge `(a, b)` by the edge joining the two vertices opposite
+    /// it. Refused (returns `false`) at a boundary, if that edge already
+    /// exists, or if a new face would flip relative to the old ones.
+    pub fn flip(&mut self, a: u32, b: u32) -> bool {
+        let faces = self.edge_faces(a, b);
+        if faces.len() != 2 {
+            return false;
+        }
+        // Orient: f1 = (a, b, c), f2 = (b, a, d) in winding order.
+        let rot = |t: [u32; 3], x: u32| {
+            let k = t.iter().position(|&v| v == x).expect("vertex in face");
+            [t[k], t[(k + 1) % 3], t[(k + 2) % 3]]
+        };
+        let (mut f1, mut f2) = (faces[0], faces[1]);
+        let mut t1 = rot(self.triangles[f1 as usize], a);
+        if t1[1] != b {
+            std::mem::swap(&mut f1, &mut f2);
+            t1 = rot(self.triangles[f1 as usize], a);
+        }
+        let t2 = rot(self.triangles[f2 as usize], b);
+        if t1[1] != b || t2[1] != a {
+            return false;
+        }
+        let (c, d) = (t1[2], t2[2]);
+        if c == d || self.adjacent(c, d) {
+            return false;
+        }
+        let (n1, n2) = (self.face_normal(t1), self.face_normal(t2));
+        let (m1, m2) = (self.face_normal([a, d, c]), self.face_normal([d, b, c]));
+        let reference = n1 + n2;
+        for n in [m1, m2] {
+            if n.dot(reference) <= 0.2 * n.length() * reference.length() {
+                return false;
+            }
+        }
+        self.triangles[f1 as usize] = [a, d, c];
+        self.triangles[f2 as usize] = [d, b, c];
+        self.vertex_faces[a as usize].retain(|&f| f != f2);
+        self.vertex_faces[b as usize].retain(|&f| f != f1);
+        self.vertex_faces[c as usize].push(f2);
+        self.vertex_faces[d as usize].push(f1);
+        true
+    }
+
     /// Triangles not removed by [`EditMesh::collapse`].
     pub fn live_triangles(&self) -> Vec<[u32; 3]> {
         self.triangles
@@ -311,6 +368,9 @@ impl EditMesh {
     /// Move `v` a fraction `k` towards the centroid of its neighbours,
     /// within its tangent plane, unless that would flip a face.
     pub fn relax(&mut self, v: u32, k: f64) {
+        if self.pinned(v) {
+            return;
+        }
         let n = self.neighbors(v);
         if n.is_empty() {
             return;
@@ -321,6 +381,9 @@ impl EditMesh {
         let mut d = c - p;
         d -= d.dot(normal) * normal;
         let q = p + k * d;
+        if self.keep_midline && (q.x < 0.0) != (p.x < 0.0) {
+            return;
+        }
         let faces = self.vertex_faces[v as usize].clone();
         let before: Vec<DVec3> = faces
             .iter()

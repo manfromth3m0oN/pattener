@@ -176,6 +176,15 @@ struct FlattenArgs {
     /// Do not rotate pieces by 90° when laying them out.
     #[arg(long)]
     no_rotate: bool,
+    /// Smooth piece outlines over about this scale σ (mm); 0 keeps them as
+    /// flattened.
+    #[arg(long, default_value_t = latexpat_core::flatten::DEFAULT_OUTLINE_SMOOTHING_MM)]
+    smooth_outline: f64,
+    /// Smooth the body shape over about this scale σ (mm) before
+    /// flattening, so hollows and bumps latex bridges do not shape the
+    /// pattern; 0 flattens it as given.
+    #[arg(long, default_value_t = latexpat_core::flatten::DEFAULT_BODY_SMOOTHING_MM)]
+    smooth_body: f64,
     /// Strip on each side of a zip seam for the zip tape (mm).
     #[arg(long, default_value_t = 10.0)]
     zip_allowance: f64,
@@ -400,6 +409,8 @@ fn flatten(args: FlattenArgs) -> Result<()> {
         ("--glue-allowance", args.glue_allowance),
         ("--hem-allowance", args.hem_allowance),
         ("--zip-allowance", args.zip_allowance),
+        ("--smooth-outline", args.smooth_outline),
+        ("--smooth-body", args.smooth_body),
         ("--notch-spacing", args.notch_spacing),
         ("--sheet-gap", args.sheet_gap),
     ] {
@@ -411,7 +422,7 @@ fn flatten(args: FlattenArgs) -> Result<()> {
         bail!("--heatmap-range must be greater than 1");
     }
     let mut materials = None;
-    let (mesh, seams, source, up, along, zones, edges) = match (&args.project, &args.mesh) {
+    let (mesh, seams, source, up, along, zones, edges, mirror) = match (&args.project, &args.mesh) {
         (Some(path), _) => {
             let t =
                 fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
@@ -461,6 +472,7 @@ fn flatten(args: FlattenArgs) -> Result<()> {
                 Some(along),
                 zones,
                 g.edges,
+                g.mirror,
             )
         }
         (None, Some(path)) => {
@@ -485,6 +497,7 @@ fn flatten(args: FlattenArgs) -> Result<()> {
                 None,
                 Vec::new(),
                 Vec::new(),
+                None,
             )
         }
         (None, None) => unreachable!("clap requires a mesh or a project"),
@@ -554,6 +567,9 @@ fn flatten(args: FlattenArgs) -> Result<()> {
             allow_rotation: !args.no_rotate,
         }),
         edges,
+        mirror,
+        outline_smoothing_mm: args.smooth_outline,
+        body_smoothing_mm: args.smooth_body,
         print: args.pdf.map(|p| PrintOptions {
             paper: match p {
                 PaperArg::A4 => Paper::A4,

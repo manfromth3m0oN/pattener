@@ -83,6 +83,17 @@ pub struct JobOptions {
     pub edges: Vec<EdgeSpec>,
     /// Also produce a tiled print-at-home PDF.
     pub print: Option<PrintOptions>,
+    /// Outline smoothing scale `σ` (mm; see [`crate::outline`]); 0 keeps
+    /// outlines as flattened.
+    pub outline_smoothing_mm: f64,
+    /// Smooth the body shape over this scale `σ` (mm; see
+    /// [`crate::smoothing`]) before flattening; 0 flattens it as given.
+    pub body_smoothing_mm: f64,
+    /// Mirror image of each mesh vertex for a symmetric garment (from
+    /// [`garment::build`](crate::garment::build)): mirror-image pieces
+    /// come out as exact mirror images.
+    #[cfg_attr(feature = "serde", serde(skip))]
+    pub mirror: Option<Vec<u32>>,
 }
 
 impl Default for JobOptions {
@@ -104,6 +115,9 @@ impl Default for JobOptions {
             materials: None,
             edges: Vec::new(),
             print: None,
+            outline_smoothing_mm: crate::flatten::DEFAULT_OUTLINE_SMOOTHING_MM,
+            body_smoothing_mm: crate::flatten::DEFAULT_BODY_SMOOTHING_MM,
+            mirror: None,
         }
     }
 }
@@ -114,6 +128,19 @@ impl Default for JobOptions {
 pub struct PanelReport {
     pub index: usize,
     pub file: String,
+    /// For a symmetric garment: the piece this one is the mirror image of
+    /// (its own index for a piece that is symmetric itself).
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+    pub mirror_of: Option<usize>,
+    /// Misfit of the piece's worst patch: how far, around the place it
+    /// strains most, it is from the shape the ease asks for (see
+    /// [`crate::hints`]; 0.1 ≈ 10 %).
+    pub strain_spread: f64,
+    /// For a piece that strains (spread above
+    /// [`SPREAD_HINT`](crate::hints::SPREAD_HINT)): the point on the
+    /// body (mesh coordinates, mm) a dart or seam should run towards.
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+    pub strain_hint: Option<[f64; 3]>,
     pub sheet: Option<String>,
     pub ease: f64,
     pub seams: Vec<String>,
@@ -321,6 +348,9 @@ pub fn run(mesh: &Mesh, seams: &SeamSet, opts: &JobOptions) -> Result<JobOutput>
         panel_stiffness: stiffness,
         length_relief: opts.length_relief,
         along: opts.along.clone(),
+        outline_smoothing_mm: opts.outline_smoothing_mm,
+        body_smoothing_mm: opts.body_smoothing_mm,
+        mirror: opts.mirror.clone(),
     };
     let garment = flatten_garment(mesh, seams, &fopts)?;
     let fit = pressure_map(mesh, &garment, &pressure_k);
@@ -336,15 +366,62 @@ pub fn run(mesh: &Mesh, seams: &SeamSet, opts: &JobOptions) -> Result<JobOutput>
         trims: trims.clone(),
         assembly: assembly_steps(&garment, &pieces, seams, &opts.edges, &trims),
     };
+    // Where pieces strain (see `hints`).
+    let patches: Vec<(f64, u32)> = garment
+        .panels
+        .iter()
+        .zip(&garment.area_misfit)
+        .map(|(fp, m)| crate::hints::worst_patch(fp, m))
+        .collect();
+    let spreads: Vec<f64> = patches.iter().map(|p| p.0).collect();
+    let hints: Vec<Option<[f64; 3]>> = garment
+        .panels
+        .iter()
+        .zip(&patches)
+        .map(|(fp, &(s, v))| {
+            if s <= crate::hints::SPREAD_HINT {
+                return None;
+            }
+            let p = mesh.positions()[fp.panel.vertex_origin[v as usize] as usize];
+            Some([p.x, p.y, p.z])
+        })
+        .collect();
+    for (i, (h, &s)) in hints.iter().zip(&spreads).enumerate() {
+        // One warning per mirror-image pair.
+        let Some(h) = h else {
+            continue;
+        };
+        if garment.mirrored[i].is_some_and(|j| j < i) {
+            continue;
+        }
+        let pair = match garment.mirrored[i] {
+            Some(j) if j != i => format!("pieces {i} and {j} have"),
+            _ => format!("piece {i} has"),
+        };
+        warnings.push(format!(
+            "{pair} to distort by about {:.0} % to lie flat around ({:.0}, {:.0}, {:.0}) mm, \
+             where the body curves both ways: a dart or seam from the nearest edge towards it \
+             (or, at an armpit, a set-in sleeve) would let it lie flatter",
+            100.0 * s,
+            h[0],
+            h[1],
+            h[2]
+        ));
+    }
     let mut panel_svgs = Vec::new();
     let mut titles = Vec::new();
     for (i, fp) in garment.panels.iter().enumerate() {
         let names = seam_names(fp, seams);
-        let label = if names.is_empty() {
+        let mut label = if names.is_empty() {
             format!("panel {i}")
         } else {
             format!("panel {i} — {}", names.join(", "))
         };
+        match garment.mirrored[i] {
+            Some(j) if j == i => label.push_str(" (symmetric)"),
+            Some(j) => label.push_str(&format!(" (mirror image of panel {j})")),
+            None => {}
+        }
         panel_svgs.push(panel_svg(
             fp,
             &pieces[i],
@@ -387,6 +464,9 @@ pub fn run(mesh: &Mesh, seams: &SeamSet, opts: &JobOptions) -> Result<JobOutput>
         report.panels.push(PanelReport {
             index: i,
             file: format!("panel_{i:02}.svg"),
+            mirror_of: garment.mirrored[i],
+            strain_spread: spreads[i],
+            strain_hint: hints[i],
             sheet: panel_sheets[i].1.clone(),
             ease: panel_sheets[i].0,
             seams: names,

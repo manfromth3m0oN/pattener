@@ -270,6 +270,7 @@ function drawMarks() {
 
 let garmentBusy = false, garmentAgain = false;
 async function refreshGarment() {
+  $('g-asym').checked = !!design.asymmetric;
   renderCurveList();
   renderZones();
   lastFit = null;
@@ -296,14 +297,15 @@ async function refreshGarment() {
         triangles: new Uint32Array(p.triangles), color: hexToRgb(p.color),
       }));
       viewer?.setMesh(new Float32Array(r.positions), new Uint32Array(r.triangles), new Uint32Array(r.garment_triangles), null, pieces);
-      viewer?.setLines([
+      lastLines = [
         ...r.curves.map((c) => ({
           points: new Float32Array(c.points),
           closed: c.closed,
           color: c.kind === 'edge' ? EDGE_COLOR : SEAM_COLOR,
         })),
         ...zoneLoops(r.zones),
-      ]);
+      ];
+      viewer?.setLines(lastLines);
       $('g-warnings').replaceChildren(...r.warnings.map((w) => Object.assign(document.createElement('li'), { textContent: w })));
       if (r.panel_error) {
         status.className = 'error';
@@ -329,6 +331,10 @@ function changed() {
   saveLocal();
   refreshGarment();
 }
+$('g-asym').onchange = () => {
+  if ($('g-asym').checked) design.asymmetric = true; else delete design.asymmetric;
+  changed();
+};
 
 if (viewer) {
   viewer.onClick = (e) => {
@@ -486,6 +492,23 @@ function renderZones() {
 }
 
 // Three great circles per zone, so its extent reads from any angle.
+let lastLines = [];
+// Red rings where pieces strain (report.panels[].strain_hint); a symmetric
+// piece is marked on both sides.
+const HINT_COLOR = [0.85, 0.1, 0.1];
+function hintLoops(panels) {
+  const zones = [];
+  for (const p of panels) {
+    if (!p.strain_hint) continue;
+    zones.push({ center: p.strain_hint, radius_mm: 30 });
+    if (p.mirror_of === p.index) {
+      const [x, y, z] = p.strain_hint;
+      zones.push({ center: [-x, y, z], radius_mm: 30 });
+    }
+  }
+  return zoneLoops(zones).map((l) => ({ ...l, color: HINT_COLOR }));
+}
+
 function zoneLoops(zones) {
   const loops = [];
   for (const z of zones) {
@@ -739,8 +762,9 @@ function show(output, extraFiles) {
   if (output.layout_svg) dl.appendChild(fileLink('layout.svg', output.layout_svg, 'image/svg+xml'));
   dl.appendChild(fileLink('report.json', JSON.stringify(r, null, 2), 'application/json'));
 
+  const pairing = (p) => (p.mirror_of == null ? '' : p.mirror_of === p.index ? ' (symmetric)' : ` (mirror of ${p.mirror_of})`);
   table($('panel-table'), ['panel', 'ease', 'min σ', '95 % under', 'max σ', 'slack', 'mmHg', '95 % under', 'bridging', 'cut size (mm)', 'seams'],
-    r.panels.map((p) => [p.index, f(p.ease, 3), f(p.min_stretch, 3), f(p.p95_stretch, 3), f(p.max_stretch, 3),
+    r.panels.map((p) => [`${p.index}${pairing(p)}`, f(p.ease, 3), f(p.min_stretch, 3), f(p.p95_stretch, 3), f(p.max_stretch, 3),
       `${f(100 * p.slack_fraction, 0)} %`, f(p.mean_pressure_mmhg, 1), f(p.p95_pressure_mmhg, 1), `${f(100 * p.bridging_fraction, 0)} %`,
       `${f(p.cut_width_mm)} × ${f(p.cut_height_mm)}`, p.seams.join(', ')]));
   table($('seam-table'), ['seam', 'panels', 'body (mm)', 'flat (mm)', 'mismatch (mm)', 'before matching'],
@@ -858,6 +882,8 @@ async function run() {
         notch_spacing: num('notch') > 0 ? num('notch') : null,
         zip_allowance: num('zip'),
       },
+      outline_smoothing_mm: Math.max(0, num('smooth')),
+      body_smoothing_mm: Math.max(0, num('smooth-body')),
       print: $('paper').value ? { paper: $('paper').value } : null,
       heatmap: $('heatmap').value || null,
       length_relief: Math.max(0, Math.min(100, num('length-relief'))) / 100,
@@ -879,6 +905,7 @@ async function run() {
       };
       $('pressure-panel').hidden = false;
       showFit();
+      viewer?.setLines([...lastLines, ...hintLoops(res.output.report.panels)]);
     }
     status.textContent = `Done in ${f((performance.now() - t0) / 1000, 1)} s: ${res.output.report.panels.length} panels.`;
   } catch (e) {
