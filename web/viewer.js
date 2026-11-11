@@ -9,8 +9,11 @@ class Viewer {
     if (!gl) throw new Error('this browser does not support WebGL2');
     this.gl = gl;
     this.mesh = null;
+    this.overlay = null;
     this.lines = [];
+    this.marks = null;
     this.color = [0.82, 0.78, 0.74];
+    this.overlayColor = [0.16, 0.16, 0.18];
     this.resetView();
 
     const vs = `#version 300 es
@@ -35,11 +38,21 @@ class Viewer {
       lit: gl.getUniformLocation(this.prog, 'lit'),
     };
 
-    let drag = null;
-    canvas.addEventListener('pointerdown', (e) => { drag = [e.clientX, e.clientY]; canvas.setPointerCapture(e.pointerId); });
-    canvas.addEventListener('pointerup', () => { drag = null; });
+    this.onClick = null;
+    let drag = null, travelled = 0;
+    canvas.addEventListener('pointerdown', (e) => {
+      drag = [e.clientX, e.clientY];
+      travelled = 0;
+      canvas.setPointerCapture(e.pointerId);
+    });
+    canvas.addEventListener('pointerup', (e) => {
+      // A click (not a drag) picks a point on the surface.
+      if (drag && travelled < 5 && this.onClick) this.onClick(e);
+      drag = null;
+    });
     canvas.addEventListener('pointermove', (e) => {
       if (!drag) return;
+      travelled += Math.abs(e.clientX - drag[0]) + Math.abs(e.clientY - drag[1]);
       this.yaw += (e.clientX - drag[0]) * 0.01;
       this.pitch = Math.max(-1.4, Math.min(1.4, this.pitch + (e.clientY - drag[1]) * 0.01));
       drag = [e.clientX, e.clientY];
@@ -82,7 +95,9 @@ class Viewer {
   }
 
   // positions: Float32Array (x, y, z per vertex, mm); triangles: Uint32Array.
-  setMesh(positions, triangles) {
+  // overlay: optional Uint32Array of triangles drawn in overlayColor (the
+  // garment) instead of the base colour.
+  setMesh(positions, triangles, overlay = null) {
     const normals = new Float32Array(positions.length);
     for (let t = 0; t < triangles.length; t += 3) {
       const [a, b, c] = [triangles[t] * 3, triangles[t + 1] * 3, triangles[t + 2] * 3];
@@ -101,18 +116,86 @@ class Viewer {
     this.center = [0, 1, 2].map((k) => (lo[k] + hi[k]) / 2);
     this.radius = Math.max(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]) / 2;
     const gl = this.gl;
+    let base = triangles;
+    if (overlay && overlay.length) {
+      const key = (a, b, c) => `${a},${b},${c}`;
+      const inOverlay = new Set();
+      for (let t = 0; t < overlay.length; t += 3) inOverlay.add(key(overlay[t], overlay[t + 1], overlay[t + 2]));
+      const keep = [];
+      for (let t = 0; t < triangles.length; t += 3) {
+        if (!inOverlay.has(key(triangles[t], triangles[t + 1], triangles[t + 2]))) keep.push(triangles[t], triangles[t + 1], triangles[t + 2]);
+      }
+      base = new Uint32Array(keep);
+    }
     this.mesh = {
       pos: this._buffer(positions),
       nrm: this._buffer(normals),
-      idx: this._buffer(triangles, gl.ELEMENT_ARRAY_BUFFER),
-      count: triangles.length,
+      idx: this._buffer(base, gl.ELEMENT_ARRAY_BUFFER),
+      count: base.length,
     };
+    this.overlay = overlay && overlay.length
+      ? { idx: this._buffer(overlay, gl.ELEMENT_ARRAY_BUFFER), count: overlay.length }
+      : null;
     this.draw();
   }
 
-  // loops: array of { points: Float32Array, color: [r, g, b] }.
+  // Ray from the camera through a pointer event: { origin, dir }.
+  ray(e) {
+    const r = this.canvas.getBoundingClientRect();
+    const nx = ((e.clientX - r.left) / r.width) * 2 - 1;
+    const ny = 1 - ((e.clientY - r.top) / r.height) * 2;
+    const { eye, x, y, z } = this.camera;
+    const h = Math.tan(FOVY / 2), aspect = r.width / r.height;
+    const d = [0, 1, 2].map((k) => -z[k] + x[k] * nx * h * aspect + y[k] * ny * h);
+    const l = Math.hypot(...d);
+    return { origin: eye, dir: d.map((v) => v / l) };
+  }
+
+  // Nearest hit of a ray on a mesh: { face, u, v, t } with barycentric u, v
+  // of the triangle's second and third corners (Möller–Trumbore), or null.
+  static intersect(ray, positions, triangles) {
+    const { origin: o, dir: d } = ray;
+    let best = null;
+    for (let f = 0; f < triangles.length / 3; f++) {
+      const a = triangles[3 * f] * 3, b = triangles[3 * f + 1] * 3, c = triangles[3 * f + 2] * 3;
+      const e1 = [positions[b] - positions[a], positions[b + 1] - positions[a + 1], positions[b + 2] - positions[a + 2]];
+      const e2 = [positions[c] - positions[a], positions[c + 1] - positions[a + 1], positions[c + 2] - positions[a + 2]];
+      const p = [d[1] * e2[2] - d[2] * e2[1], d[2] * e2[0] - d[0] * e2[2], d[0] * e2[1] - d[1] * e2[0]];
+      const det = e1[0] * p[0] + e1[1] * p[1] + e1[2] * p[2];
+      if (Math.abs(det) < 1e-12) continue;
+      const inv = 1 / det;
+      const s = [o[0] - positions[a], o[1] - positions[a + 1], o[2] - positions[a + 2]];
+      const u = (s[0] * p[0] + s[1] * p[1] + s[2] * p[2]) * inv;
+      if (u < 0 || u > 1) continue;
+      const q = [s[1] * e1[2] - s[2] * e1[1], s[2] * e1[0] - s[0] * e1[2], s[0] * e1[1] - s[1] * e1[0]];
+      const v = (d[0] * q[0] + d[1] * q[1] + d[2] * q[2]) * inv;
+      if (v < 0 || u + v > 1) continue;
+      const t = (e2[0] * q[0] + e2[1] * q[1] + e2[2] * q[2]) * inv;
+      if (t > 0 && (!best || t < best.t)) best = { face: f, u, v, t };
+    }
+    return best;
+  }
+
+  // Small crosses at points (Float32Array x, y, z ...), size in mm.
+  setMarks(points, color, size = 8) {
+    if (!points || !points.length) { this.marks = null; this.draw(); return; }
+    const seg = [];
+    for (let i = 0; i < points.length; i += 3) {
+      for (let k = 0; k < 3; k++) {
+        const a = [points[i], points[i + 1], points[i + 2]], b = [...a];
+        a[k] -= size; b[k] += size;
+        seg.push(...a, ...b);
+      }
+    }
+    this.marks = { buf: this._buffer(new Float32Array(seg)), count: seg.length / 3, color };
+    this.draw();
+  }
+
+  // loops: array of { points: Float32Array, color: [r, g, b], closed = true }.
   setLines(loops) {
-    this.lines = loops.map((l) => ({ buf: this._buffer(l.points), count: l.points.length / 3, color: l.color }));
+    this.lines = loops.map((l) => ({
+      buf: this._buffer(l.points), count: l.points.length / 3, color: l.color, closed: l.closed !== false,
+    }));
     this.draw();
   }
 
@@ -135,8 +218,9 @@ class Viewer {
       this.center[1] + dist * Math.sin(this.pitch),
       this.center[2] + dist * Math.cos(this.yaw) * Math.cos(this.pitch),
     ];
-    const proj = perspective(0.6, w / h, dist * 0.05, dist * 4);
+    const proj = perspective(FOVY, w / h, dist * 0.05, dist * 4);
     const view = lookAt(eye, this.center, [0, 1, 0]);
+    this.camera = { eye, ...basis(eye, this.center, [0, 1, 0]) };
     gl.uniformMatrix4fv(this.loc.mvp, false, mul(proj, view));
     gl.uniformMatrix4fv(this.loc.model, false, [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
 
@@ -153,6 +237,11 @@ class Viewer {
     gl.vertexAttribPointer(this.loc.nrm, 3, gl.FLOAT, false, 0, 0);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.mesh.idx);
     gl.drawElements(gl.TRIANGLES, this.mesh.count, gl.UNSIGNED_INT, 0);
+    if (this.overlay) {
+      gl.uniform3fv(this.loc.color, this.overlayColor);
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.overlay.idx);
+      gl.drawElements(gl.TRIANGLES, this.overlay.count, gl.UNSIGNED_INT, 0);
+    }
     gl.disable(gl.POLYGON_OFFSET_FILL);
 
     gl.uniform1f(this.loc.lit, 0);
@@ -162,9 +251,26 @@ class Viewer {
       gl.uniform3fv(this.loc.color, l.color);
       gl.bindBuffer(gl.ARRAY_BUFFER, l.buf);
       gl.vertexAttribPointer(this.loc.pos, 3, gl.FLOAT, false, 0, 0);
-      gl.drawArrays(gl.LINE_LOOP, 0, l.count);
+      gl.drawArrays(l.closed ? gl.LINE_LOOP : gl.LINE_STRIP, 0, l.count);
+    }
+    if (this.marks) {
+      gl.uniform3fv(this.loc.color, this.marks.color);
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.marks.buf);
+      gl.vertexAttribPointer(this.loc.pos, 3, gl.FLOAT, false, 0, 0);
+      gl.drawArrays(gl.LINES, 0, this.marks.count);
     }
   }
+}
+
+const FOVY = 0.6;
+
+// Camera axes for lookAt: x right, y up, z towards the eye.
+function basis(eye, at, up) {
+  const norm = (a) => { const l = Math.hypot(...a); return a.map((v) => v / l); };
+  const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+  const z = norm(eye.map((v, i) => v - at[i]));
+  const x = norm(cross(up, z));
+  return { x, y: cross(z, x), z };
 }
 
 function perspective(fovy, aspect, near, far) {

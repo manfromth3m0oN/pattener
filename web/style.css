@@ -41,3 +41,14 @@ th:first-child, td:first-child { text-align: left; }
 #fit-table td.off { color: #a14a00; font-weight: 600; }
 #fit-warnings li { color: #a14a00; }
 #body-downloads a { margin-right: 0.8rem; }
+
+.toolbar { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; margin: 0.4rem 0; }
+.toolbar label { margin: 0; flex-direction: row; align-items: center; gap: 0.3rem; }
+.toolbar button.active { background: #1d1d1f; color: white; }
+.curve-list { list-style: none; padding: 0; margin: 0.3rem 0; font-size: 0.9rem; }
+.curve-list li { padding: 0.2rem 0.4rem; border-radius: 4px; cursor: pointer; }
+.curve-list li.selected { background: #eef3ff; }
+.curve-list .kind { display: inline-block; width: 0.7rem; height: 0.7rem; border-radius: 2px; margin-right: 0.4rem; vertical-align: middle; }
+#g-status.error { color: #b00020; }
+#g-warnings li { color: #a14a00; }
+#viewer.picking { cursor: crosshair; }

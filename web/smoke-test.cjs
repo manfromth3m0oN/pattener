@@ -12,7 +12,7 @@ const done = (p) => p.waitForFunction(
 
 (async () => {
   const browser = await chromium.launch({ args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
-  const page = await browser.newPage();
+  const page = await browser.newPage({ viewport: { width: 1250, height: 1000 } });
   const errors = [];
   page.on('pageerror', (e) => errors.push(String(e)));
   await page.goto(url);
@@ -28,7 +28,6 @@ const done = (p) => p.waitForFunction(
   assert.match(await page.textContent('#fit-status'), /Fitted/);
   assert.equal(await page.locator('#fit-warnings li').count(), 0);
   assert.equal(await page.locator('#fit-table tr').count(), 16);
-  assert.ok(await page.isDisabled('#run'));
   // An unreachable combination is flagged, and the project autosaves.
   await page.fill('#m-underbust', '120');
   await page.click('#fit-body');
@@ -37,6 +36,31 @@ const done = (p) => p.waitForFunction(
   await page.reload();
   await fitted();
   assert.equal(await page.inputValue('#m-underbust'), '120');
+  await page.evaluate(() => localStorage.clear());
+  await page.reload();
+  await fitted();
+
+  // 0b. Garment on the full body: load the example, draw a curve by
+  // clicking, remove it again, and make the pattern.
+  page.on('dialog', (d) => d.accept());
+  const garmentReady = () => page.waitForFunction(
+    () => /Ready|cannot|error/i.test(document.getElementById('g-status').textContent),
+    null, { timeout: 60000 });
+  await page.click('#g-example');
+  await garmentReady();
+  assert.match(await page.textContent('#g-status'), /2 flat pieces/);
+  await page.click('#g-new-seam');
+  await page.locator('#viewer').scrollIntoViewIfNeeded();
+  const box = await page.locator('#viewer').boundingBox();
+  await page.mouse.click(box.x + box.width * 0.5, box.y + box.height * 0.42);
+  await page.waitForFunction(() => /1 point/.test(document.getElementById('g-curves').textContent), null, { timeout: 30000 });
+  await page.click('#g-delete');
+  await page.waitForFunction(() => document.querySelectorAll('#g-curves li').length === 5, null, { timeout: 30000 });
+  await page.click('#run');
+  await page.waitForFunction(
+    () => !document.getElementById('run').disabled && /Done|error/i.test(document.getElementById('status').textContent),
+    null, { timeout: 60000 });
+  assert.match(await page.textContent('#status'), /Done .*2 panels/);
   await page.evaluate(() => localStorage.clear());
 
   // 1. Quick torso from the default measurements, with heatmap and sheet layout.
@@ -61,7 +85,7 @@ const done = (p) => p.waitForFunction(
   await page.setInputFiles('#obj-file', 'tests/data/cap.obj');
   await page.setInputFiles('#seams-file', 'tests/data/cap.ring.seams.json');
   await page.selectOption('#up', '0,0,1');
-  await page.click('details summary');
+  await page.click('#calib-details summary');
   await page.setInputFiles('#calib-file', 'tests/data/swatches.json');
   await page.fill('#calib-sheet', '0.40mm black');
   await page.click('#run');

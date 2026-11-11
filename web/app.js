@@ -107,6 +107,8 @@ const viewer = (() => {
 
 let fitting = false;
 let bodyUrl = null;
+let baseMesh = null;
+let tapes = [];
 async function fitBody() {
   if (fitting) return;
   fitting = true;
@@ -119,12 +121,14 @@ async function fitBody() {
     const r = await call({ command: 'human', body });
     if (!r.ok) throw new Error(r.error);
     const requested = new Set(Object.keys(body.measurements));
+    baseMesh = { positions: new Float32Array(r.positions), triangles: new Uint32Array(r.triangles) };
+    tapes = r.tapes.map((t) => ({
+      points: new Float32Array(t.points),
+      color: requested.has(t.kind) ? [0.9, 0.38, 0.0] : [0.55, 0.55, 0.6],
+    }));
     if (viewer) {
-      viewer.setMesh(new Float32Array(r.positions), new Uint32Array(r.triangles));
-      viewer.setLines(r.tapes.map((t) => ({
-        points: new Float32Array(t.points),
-        color: requested.has(t.kind) ? [0.9, 0.38, 0.0] : [0.55, 0.55, 0.6],
-      })));
+      viewer.setMesh(baseMesh.positions, baseMesh.triangles);
+      viewer.setLines(tapes);
     }
     const off = r.measured.filter((m) => m.requested != null && Math.abs(m.value - m.requested) > FIT_WARNING_MM);
     table($('fit-table'), ['measurement', `wanted (${units})`, `body (${units})`],
@@ -147,6 +151,7 @@ async function fitBody() {
     const a = Object.assign(document.createElement('a'), { href: bodyUrl, download: 'body.obj', textContent: 'body.obj' });
     $('body-downloads').replaceChildren(document.createTextNode('Download: '), a);
     status.textContent = `Fitted in ${r.iterations} step(s).`;
+    await refreshGarment();
   } catch (e) {
     status.className = 'error';
     status.textContent = e.message || String(e);
@@ -157,6 +162,165 @@ async function fitBody() {
 }
 $('fit-body').onclick = fitBody;
 
+// ---- garment drawn on the body ------------------------------------------------
+let design = { curves: [], inside: null };
+let active = -1;          // selected curve index
+let picking = null;       // 'add' | 'inside' | null
+const EDGE_COLOR = [0.95, 0.75, 0.05], SEAM_COLOR = [0.15, 0.6, 1.0], ACTIVE_COLOR = [1, 1, 1];
+
+// Surface point (face + barycentric) to 3D on the fitted body.
+function pointOf(sp) {
+  const { positions: p, triangles: t } = baseMesh;
+  const w = [1 - sp.u - sp.v, sp.u, sp.v];
+  return [0, 1, 2].map((k) => w.reduce((acc, wi, i) => acc + wi * p[t[3 * sp.face + i] * 3 + k], 0));
+}
+
+function setPicking(mode) {
+  picking = mode;
+  $('g-inside').classList.toggle('active', mode === 'inside');
+  if (viewer) $('viewer').classList.toggle('picking', !!mode);
+}
+
+function newCurve(kind) {
+  const n = design.curves.filter((c) => c.kind === kind).length + 1;
+  design.curves.push({ name: `${kind} ${n}`, kind, points: [], closed: kind === 'edge', mirror: false });
+  active = design.curves.length - 1;
+  setPicking('add');
+  changed();
+}
+
+function renderCurveList() {
+  const list = $('g-curves');
+  list.replaceChildren(...design.curves.map((c, i) => {
+    const li = document.createElement('li');
+    li.className = i === active ? 'selected' : '';
+    const sw = document.createElement('span');
+    sw.className = 'kind';
+    sw.style.background = `rgb(${(c.kind === 'edge' ? EDGE_COLOR : SEAM_COLOR).map((x) => x * 255).join(',')})`;
+    li.append(sw, `${c.name} (${c.kind}, ${c.points.length} point${c.points.length === 1 ? '' : 's'}${c.closed ? ', loop' : ''}${c.mirror ? ', mirrored' : ''})`);
+    li.onclick = () => { active = i; setPicking('add'); renderCurveList(); drawMarks(); };
+    return li;
+  }));
+  const c = design.curves[active];
+  $('g-active').hidden = !c;
+  if (c) {
+    $('g-name').value = c.name;
+    $('g-closed').checked = c.closed;
+    $('g-mirror').checked = c.mirror;
+  }
+}
+
+function drawMarks() {
+  if (!viewer || !baseMesh) return;
+  const c = design.curves[active];
+  const pts = [];
+  if (c) c.points.forEach((p) => pts.push(...pointOf(p)));
+  if (design.inside) pts.push(...pointOf(design.inside));
+  viewer.setMarks(new Float32Array(pts), ACTIVE_COLOR, 7);
+}
+
+let garmentBusy = false, garmentAgain = false;
+async function refreshGarment() {
+  renderCurveList();
+  if (!baseMesh) return;
+  if (garmentBusy) { garmentAgain = true; return; }
+  garmentBusy = true;
+  const status = $('g-status');
+  try {
+    do {
+      garmentAgain = false;
+      const empty = design.curves.every((c) => c.points.length === 0) && !design.inside;
+      if (empty) {
+        viewer?.setMesh(baseMesh.positions, baseMesh.triangles);
+        viewer?.setLines(tapes);
+        status.className = '';
+        status.textContent = 'No garment yet: start with New edge, or load the example.';
+        $('g-warnings').replaceChildren();
+        continue;
+      }
+      const r = await call({ command: 'garment', body: readBody(), design });
+      if (!r.ok) throw new Error(r.error);
+      viewer?.setMesh(new Float32Array(r.positions), new Uint32Array(r.triangles), new Uint32Array(r.garment_triangles));
+      viewer?.setLines(r.curves.map((c, i) => ({
+        points: new Float32Array(c.points),
+        closed: c.closed,
+        color: c.kind === 'edge' ? EDGE_COLOR : SEAM_COLOR,
+      })));
+      $('g-warnings').replaceChildren(...r.warnings.map((w) => Object.assign(document.createElement('li'), { textContent: w })));
+      if (r.panel_error) {
+        status.className = 'error';
+        status.textContent = r.panel_error.replace(/^panel \d+ /, 'A piece ');
+      } else if (r.panels != null) {
+        status.className = '';
+        status.textContent = `Ready: the seams cut this garment into ${r.panels} flat piece${r.panels === 1 ? '' : 's'}.`;
+      } else {
+        status.className = '';
+        status.textContent = 'Pick a point inside the garment to choose its area.';
+      }
+    } while (garmentAgain);
+  } catch (e) {
+    status.className = 'error';
+    status.textContent = e.message || String(e);
+  } finally {
+    garmentBusy = false;
+    drawMarks();
+  }
+}
+
+function changed() {
+  saveLocal();
+  refreshGarment();
+}
+
+if (viewer) {
+  viewer.onClick = (e) => {
+    if (!picking || !baseMesh) return;
+    const hit = Viewer.intersect(viewer.ray(e), baseMesh.positions, baseMesh.triangles);
+    if (!hit) return;
+    const sp = { face: hit.face, u: hit.u, v: hit.v };
+    if (picking === 'inside') {
+      design.inside = sp;
+      setPicking(design.curves[active] ? 'add' : null);
+    } else if (design.curves[active]) {
+      design.curves[active].points.push(sp);
+    } else {
+      return;
+    }
+    changed();
+  };
+}
+$('g-new-edge').onclick = () => newCurve('edge');
+$('g-new-seam').onclick = () => newCurve('seam');
+$('g-inside').onclick = () => setPicking(picking === 'inside' ? 'add' : 'inside');
+$('g-undo').onclick = () => {
+  const c = design.curves[active];
+  if (c && c.points.length) { c.points.pop(); changed(); }
+};
+$('g-delete').onclick = () => {
+  if (active < 0) return;
+  design.curves.splice(active, 1);
+  active = Math.min(active, design.curves.length - 1);
+  changed();
+};
+$('g-clear').onclick = () => {
+  if (design.curves.length && !confirm('Remove the whole garment drawing?')) return;
+  design = { curves: [], inside: null };
+  active = -1;
+  setPicking(null);
+  changed();
+};
+$('g-example').onclick = async () => {
+  if (design.curves.length && !confirm('Replace the current garment with the example top?')) return;
+  const p = await (await fetch('examples/top.project.json')).json();
+  design = p.garment;
+  active = -1;
+  setPicking(null);
+  changed();
+};
+$('g-name').oninput = () => { const c = design.curves[active]; if (c) { c.name = $('g-name').value; saveLocal(); renderCurveList(); } };
+$('g-closed').onchange = () => { const c = design.curves[active]; if (c) { c.closed = $('g-closed').checked; changed(); } };
+$('g-mirror').onchange = () => { const c = design.curves[active]; if (c) { c.mirror = $('g-mirror').checked; changed(); } };
+
 // ---- project: save, open, autosave ----------------------------------------------
 const STORAGE_KEY = 'latexpat.project';
 const EXAMPLE_BODY = {
@@ -164,13 +328,16 @@ const EXAMPLE_BODY = {
   shape: {},
 };
 function readProject() {
-  return { version: 1, name: $('project-name').value.trim() || 'Untitled', body: readBody(), units };
+  return { version: 1, name: $('project-name').value.trim() || 'Untitled', body: readBody(), garment: design, units };
 }
 function writeProject(p) {
   $('project-name').value = p.name || 'Untitled';
   units = UNIT_MM[p.units] ? p.units : 'cm';
   $('units').value = units;
   writeBody(p.body || {});
+  design = p.garment && Array.isArray(p.garment.curves) ? p.garment : { curves: [], inside: null };
+  active = -1;
+  setPicking(null);
 }
 function saveLocal() {
   try {
@@ -202,7 +369,7 @@ $('project-open').onchange = async () => {
 };
 $('project-new').onclick = () => {
   if (!confirm('Start a new project? Unsaved changes to this one will be lost.')) return;
-  writeProject({ name: 'Untitled', body: { measurements: {}, shape: {} }, units });
+  writeProject({ name: 'Untitled', body: { measurements: {}, shape: {} }, garment: { curves: [], inside: null }, units });
   saveLocal();
   fitBody();
 };
@@ -259,8 +426,8 @@ function showSource() {
   $('human-panel').hidden = s !== 'human';
   $('measure-panel').hidden = s !== 'measure';
   $('upload-panel').hidden = s !== 'upload';
-  $('run').disabled = s === 'human';
-  $('run-note').hidden = s !== 'human';
+  $('run').disabled = false;
+  $('run-note').hidden = true;
 }
 document.querySelectorAll('input[name=source]').forEach((r) => { r.onchange = showSource; });
 
@@ -346,7 +513,9 @@ async function run() {
   try {
     let obj, seams, scale = 1, up = [0, 1, 0];
     const extra = [];
-    if (source() === 'measure') {
+    if (source() === 'human') {
+      // Built below from the garment drawn on the full body.
+    } else if (source() === 'measure') {
       const body = await call({
         command: 'body',
         measurements: { levels: readLevels() },
@@ -383,7 +552,9 @@ async function run() {
       sheet: sheetWidth > 0 ? { sheet_width: sheetWidth, gap: 5, allow_rotation: true } : null,
     };
     const t0 = performance.now();
-    const res = await call({ command: 'pattern', obj, seams, scale, options });
+    const res = source() === 'human'
+      ? await call({ command: 'garment', body: readBody(), design, pattern: true, options })
+      : await call({ command: 'pattern', obj, seams, scale, options });
     if (!res.ok) throw new Error(res.error);
     show(res.output, extra);
     status.textContent = `Done in ${f((performance.now() - t0) / 1000, 1)} s: ${res.output.report.panels.length} panels.`;
@@ -391,7 +562,7 @@ async function run() {
     status.className = 'error';
     status.textContent = e.message || String(e);
   } finally {
-    $('run').disabled = source() === 'human';
+    $('run').disabled = false;
   }
 }
 $('run').onclick = run;

@@ -45,7 +45,35 @@
         <canvas id="viewer" aria-label="3D view of the body"></canvas>
         <p class="hint">Drag to turn, scroll to zoom, double-click to reset. Orange lines show where each supplied girth is measured.</p>
         <ul id="fit-warnings"></ul>
-        <table id="fit-table"></table>
+
+        <div id="garment-tools">
+          <h3>Garment</h3>
+          <p class="hint">Draw on the body. <b>Edges</b> are necklines, hems, cuffs and leg openings; close each loop.
+            <b>Seams</b> split the garment into pieces that lie flat; their ends snap onto an edge or seam within 2 cm.
+            Curves pass smoothly through the points you click. Then pick a point inside the garment.</p>
+          <div class="toolbar">
+            <button type="button" id="g-new-edge">New edge</button>
+            <button type="button" id="g-new-seam">New seam</button>
+            <button type="button" id="g-inside">Pick inside</button>
+            <button type="button" id="g-undo">Undo point</button>
+            <button type="button" id="g-delete">Delete curve</button>
+            <button type="button" id="g-example">Load example top</button>
+            <button type="button" id="g-clear">Clear</button>
+          </div>
+          <div id="g-active" class="toolbar" hidden>
+            <label>Name <input type="text" id="g-name"></label>
+            <label class="check"><input type="checkbox" id="g-closed"> Closed loop</label>
+            <label class="check"><input type="checkbox" id="g-mirror"> Mirror to other side</label>
+          </div>
+          <ul id="g-curves" class="curve-list"></ul>
+          <p id="g-status" role="status"></p>
+          <ul id="g-warnings"></ul>
+        </div>
+
+        <details>
+          <summary>Measurements of the body</summary>
+          <table id="fit-table"></table>
+        </details>
         <div id="body-downloads"></div>
       </div>
     </div>
@@ -91,7 +119,7 @@
       <label>Sheet width (mm, optional) <input type="number" id="sheet-width" placeholder="e.g. 1000" min="0"></label>
       <label class="check"><input type="checkbox" id="match" checked> Match seam lengths</label>
     </div>
-    <details>
+    <details id="calib-details">
       <summary>Swatch calibration (optional)</summary>
       <p class="hint">A calibration file from <code>latexpat calibrate</code> sets the ease from your own stretch tests instead of the value above.</p>
       <label>Calibration (.json) <input type="file" id="calib-file" accept=".json"></label>
@@ -102,7 +130,7 @@
   <section>
     <button type="button" id="run" class="primary">Make pattern</button>
     <span id="status" role="status"></span>
-    <p id="run-note" class="hint" hidden>Drawing a garment on the full body is the next step in development. For now, make patterns from the quick torso or an uploaded mesh.</p>
+    <p id="run-note" class="hint" hidden>Draw a garment on the body first: edges, seams and a point inside.</p>
   </section>
 
   <section id="results" hidden>

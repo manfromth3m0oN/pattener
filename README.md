@@ -45,8 +45,36 @@ narrowest or fullest point, as with a real tape) match yours, typically to
 well under a millimetre. Combinations the model cannot reach are reported
 with how far off they are.
 
-Drawing a garment on the full body is the next step; until then, patterns
-are made from the quick torso below or an uploaded mesh.
+### Drawing the garment
+
+Below the 3D view, draw the garment on the body:
+
+- **Edges** (necklines, hems, cuffs, leg openings): click points around the
+  body; close the loop.
+- **Seams** split the garment into pieces that lie flat. Their ends snap
+  onto an edge or another seam within 2 cm.
+- Curves pass smoothly through the points you click; tick **Mirror** to get
+  the same curve on the other side.
+- **Pick inside** chooses which side of the edges is the garment.
+
+The preview shows the garment in latex colour and says how many flat
+pieces the seams make, or which piece still wraps around and needs a seam.
+**Load example top** gives a short-sleeved top to start from. Designs are
+stored as positions on the body model's triangles, which are the same for
+every body, so a design follows the body when the measurements change.
+
+```sh
+latexpat flatten --project tests/data/top.project.json -o pattern/ --heatmap max
+```
+
+Under the hood (`garment::build`): curves become Catmull–Rom splines
+sampled every 15 mm on the skin, are cut exactly into the mesh by walking
+the plane section between samples (with a shortest-path fallback where the
+plane cannot join two points, as at the armpit), the mesh is cleaned of
+tiny edges and slivers, and the garment area is flood-filled from the
+inside point without crossing edges. Seam matching never folds a panel to
+make seams equal: a seam that needs shaping keeps its difference and is
+reported (the example top, with no bust shaping, warns about this).
 
 ## Quick torso from measurements
 
@@ -245,8 +273,8 @@ flatten to sides 3.1 mm apart; matching removes the gap edge by edge
 5. ✅ Parametric torso from measurements; web UI via WASM.
 
 Next, towards designing whole garments: full body from measurements with a
-3D view and project files (done); garments drawn on the body (necklines,
-hems and seams as free curves, mirrored); fit tools (directional and
+3D view and project files (done); garments drawn on the body (done); fit
+tools (directional and
 per-region ease, pressure and bridging map); materials and colour (sheet
 catalogue, per-panel colour, preview, quantities); construction details
 and print output (zips, trims, tiled PDF, assembly guide); templates.
