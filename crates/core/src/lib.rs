@@ -26,6 +26,7 @@
 // Index loops mirror the formulas; `!(a > b)` deliberately rejects NaN.
 #![allow(clippy::needless_range_loop, clippy::neg_cmp_op_on_partial_ord)]
 
+pub mod allowance;
 pub mod arap;
 pub mod cut;
 pub mod ease;
