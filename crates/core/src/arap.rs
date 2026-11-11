@@ -52,6 +52,18 @@ impl Default for ArapOptions {
     }
 }
 
+/// A soft constraint pulling the flat distance between two local vertices
+/// towards `length` (used to equalise the two sides of a seam).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct EdgeTarget {
+    pub a: u32,
+    pub b: u32,
+    /// Target flat length (mm).
+    pub length: f64,
+    /// Weight relative to the (dimensionless) cotangent weights.
+    pub weight: f64,
+}
+
 /// Result of [`arap`].
 #[derive(Debug, Clone)]
 pub struct ArapResult {
@@ -60,9 +72,32 @@ pub struct ArapResult {
     pub energy: f64,
 }
 
+/// One term `½ w ‖(u_i − u_j) − d‖²` of the energy; `d` is refreshed by
+/// every local step.
+struct Spring {
+    i: usize,
+    j: usize,
+    w: f64,
+}
+
 /// Refine `init` (e.g. from LSCM) towards reference triangles scaled by
-/// `ease` (one value per local triangle).
-pub fn arap(panel: &Panel, ease: &[f64], init: &[DVec2], opts: &ArapOptions) -> Result<ArapResult> {
+/// `ease` (one value per local triangle), with optional edge-length
+/// targets.
+///
+/// ## Edge-length targets
+/// Each [`EdgeTarget`] adds `½ λ ‖(u_a − u_b) − d‖²` to the energy. The
+/// local step projects the current edge onto the target length,
+/// `d = ℓ (u_a − u_b)/‖u_a − u_b‖`; the global step then gains `λ` in the
+/// Laplacian and `±λ d` on the right-hand side. Because `λ` is constant
+/// the system matrix is unchanged between iterations and is still factored
+/// only once.
+pub fn arap(
+    panel: &Panel,
+    ease: &[f64],
+    init: &[DVec2],
+    opts: &ArapOptions,
+    targets: &[EdgeTarget],
+) -> Result<ArapResult> {
     assert_eq!(ease.len(), panel.triangles.len());
     assert_eq!(init.len(), panel.vertex_count());
     let n = panel.vertex_count();
@@ -80,6 +115,22 @@ pub fn arap(panel: &Panel, ease: &[f64], init: &[DVec2], opts: &ArapOptions) -> 
         .map(|q| std::array::from_fn(|k| cot_at(*q, k)))
         .collect();
 
+    // All springs: three per triangle, then one per edge target.
+    let mut springs = Vec::with_capacity(3 * panel.triangles.len() + targets.len());
+    for (t, tri) in panel.triangles.iter().enumerate() {
+        for k in 0..3 {
+            let (i, j) = (tri[(k + 1) % 3] as usize, tri[(k + 2) % 3] as usize);
+            springs.push(Spring { i, j, w: w[t][k] });
+        }
+    }
+    for e in targets {
+        springs.push(Spring {
+            i: e.a as usize,
+            j: e.b as usize,
+            w: e.weight,
+        });
+    }
+
     // Laplacian with vertex `pin` removed.
     let pin = 0usize;
     let free = |i: usize| {
@@ -92,30 +143,27 @@ pub fn arap(panel: &Panel, ease: &[f64], init: &[DVec2], opts: &ArapOptions) -> 
         }
     };
     let mut lap = SymBuilder::new(n - 1);
-    for (t, tri) in panel.triangles.iter().enumerate() {
-        for k in 0..3 {
-            let (i, j) = (tri[(k + 1) % 3] as usize, tri[(k + 2) % 3] as usize);
-            let wk = w[t][k];
-            for (a, b, v) in [(i, i, wk), (j, j, wk), (i, j, -wk), (j, i, -wk)] {
-                if let (Some(fa), Some(fb)) = (free(a), free(b)) {
-                    lap.add(fa, fb, v);
-                }
+    for sp in &springs {
+        let (i, j, wk) = (sp.i, sp.j, sp.w);
+        for (a, b, v) in [(i, i, wk), (j, j, wk), (i, j, -wk), (j, i, -wk)] {
+            if let (Some(fa), Some(fb)) = (free(a), free(b)) {
+                lap.add(fa, fb, v);
             }
         }
     }
     let solver = lap.factor()?;
 
     let mut uv = init.to_vec();
-    let mut rot = vec![(1.0, 0.0); panel.triangles.len()];
+    let mut d = vec![DVec2::ZERO; springs.len()];
     let mut prev = f64::INFINITY;
     let mut energy = f64::INFINITY;
     let mut iterations = 0;
 
     for it in 1..=opts.max_iterations {
         iterations = it;
-        // Local step.
+        // Local step: triangle rotations.
         for (t, tri) in panel.triangles.iter().enumerate() {
-            let (mut a, mut b, mut c, mut d) = (0.0, 0.0, 0.0, 0.0);
+            let (mut a, mut b, mut c, mut dd) = (0.0, 0.0, 0.0, 0.0);
             for k in 0..3 {
                 let (i, j) = ((k + 1) % 3, (k + 2) % 3);
                 let du = uv[tri[i] as usize] - uv[tri[j] as usize];
@@ -124,32 +172,37 @@ pub fn arap(panel: &Panel, ease: &[f64], init: &[DVec2], opts: &ArapOptions) -> 
                 a += wk * du.x * dx.x;
                 b += wk * du.x * dx.y;
                 c += wk * du.y * dx.x;
-                d += wk * du.y * dx.y;
+                dd += wk * du.y * dx.y;
             }
-            rot[t] = closest_rotation(a, b, c, d);
+            let (cs, sn) = closest_rotation(a, b, c, dd);
+            for k in 0..3 {
+                let dx = refs[t][(k + 1) % 3] - refs[t][(k + 2) % 3];
+                d[3 * t + k] = DVec2::new(cs * dx.x - sn * dx.y, sn * dx.x + cs * dx.y);
+            }
+        }
+        // Local step: edge-length projections.
+        let base = 3 * panel.triangles.len();
+        for (k, e) in targets.iter().enumerate() {
+            let du = uv[e.a as usize] - uv[e.b as usize];
+            let dir = du
+                .try_normalize()
+                .unwrap_or_else(|| d[base + k].normalize_or(DVec2::X));
+            d[base + k] = e.length * dir;
         }
 
-        // Global step.
+        // Global step: L u = Σ ±w d, with the pinned vertex moved to the right.
         let mut bx = vec![0.0; n - 1];
         let mut by = vec![0.0; n - 1];
         let p0 = uv[pin];
-        for (t, tri) in panel.triangles.iter().enumerate() {
-            let (cs, sn) = rot[t];
-            for k in 0..3 {
-                let (li, lj) = ((k + 1) % 3, (k + 2) % 3);
-                let (i, j) = (tri[li] as usize, tri[lj] as usize);
-                let dx = refs[t][li] - refs[t][lj];
-                let r = w[t][k] * DVec2::new(cs * dx.x - sn * dx.y, sn * dx.x + cs * dx.y);
-                // Move the pinned vertex's Laplacian column to the right-hand side.
-                let wk = w[t][k];
-                for (a, other, sign) in [(i, j, 1.0), (j, i, -1.0)] {
-                    if let Some(fa) = free(a) {
-                        bx[fa] += sign * r.x;
-                        by[fa] += sign * r.y;
-                        if other == pin {
-                            bx[fa] += wk * p0.x;
-                            by[fa] += wk * p0.y;
-                        }
+        for (sp, dk) in springs.iter().zip(&d) {
+            let r = sp.w * *dk;
+            for (a, other, sign) in [(sp.i, sp.j, 1.0), (sp.j, sp.i, -1.0)] {
+                if let Some(fa) = free(a) {
+                    bx[fa] += sign * r.x;
+                    by[fa] += sign * r.y;
+                    if other == pin {
+                        bx[fa] += sp.w * p0.x;
+                        by[fa] += sp.w * p0.y;
                     }
                 }
             }
@@ -161,7 +214,11 @@ pub fn arap(panel: &Panel, ease: &[f64], init: &[DVec2], opts: &ArapOptions) -> 
             }
         }
 
-        energy = arap_energy(panel, &refs, &w, &rot, &uv);
+        energy = springs
+            .iter()
+            .zip(&d)
+            .map(|(sp, dk)| 0.5 * sp.w * (uv[sp.i] - uv[sp.j] - *dk).length_squared())
+            .sum();
         if prev.is_finite() && prev - energy <= opts.tolerance * prev {
             break;
         }
@@ -173,27 +230,6 @@ pub fn arap(panel: &Panel, ease: &[f64], init: &[DVec2], opts: &ArapOptions) -> 
         iterations,
         energy,
     })
-}
-
-fn arap_energy(
-    panel: &Panel,
-    refs: &[[DVec2; 3]],
-    w: &[[f64; 3]],
-    rot: &[(f64, f64)],
-    uv: &[DVec2],
-) -> f64 {
-    let mut e = 0.0;
-    for (t, tri) in panel.triangles.iter().enumerate() {
-        let (cs, sn) = rot[t];
-        for k in 0..3 {
-            let (i, j) = ((k + 1) % 3, (k + 2) % 3);
-            let du = uv[tri[i] as usize] - uv[tri[j] as usize];
-            let dx = refs[t][i] - refs[t][j];
-            let rdx = DVec2::new(cs * dx.x - sn * dx.y, sn * dx.x + cs * dx.y);
-            e += 0.5 * w[t][k] * (du - rdx).length_squared();
-        }
-    }
-    e
 }
 
 #[cfg(test)]
@@ -215,6 +251,7 @@ mod tests {
             &vec![s; p.triangles.len()],
             &init,
             &ArapOptions::default(),
+            &[],
         )
         .unwrap();
         assert!(r.energy < 1e-16, "energy {}", r.energy);

@@ -51,7 +51,7 @@ pub fn flatten_panel(
     up: DVec3,
 ) -> Result<FlatPanel> {
     let init = lscm(&panel)?;
-    let mut r = arap(&panel, ease, &init, opts)?;
+    let mut r = arap(&panel, ease, &init, opts, &[])?;
     orient(&panel, &mut r.uv, up);
     let strain = measure(&panel, &r.uv);
     Ok(FlatPanel {
