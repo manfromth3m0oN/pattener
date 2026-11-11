@@ -64,7 +64,10 @@
               <select id="g-paint-sheet" aria-label="Sheet to paint"></select>
               <button type="button" id="g-paint-clear" title="Every piece back to the default sheet">Unpaint all</button>
             </span>
-            <button type="button" id="g-example">Load example top</button>
+            <span class="toolbar-group">
+              <select id="g-template" aria-label="Template"></select>
+              <button type="button" id="g-example">Start from template</button>
+            </span>
             <button type="button" id="g-clear">Clear</button>
           </div>
           <div id="g-active" class="toolbar" hidden>
@@ -88,6 +91,7 @@
                 <input type="number" id="g-finish-ease" value="90" step="1" min="50" max="100"></label>
             </span>
           </div>
+          <p id="g-template-note" class="hint"></p>
           <ul id="g-curves" class="curve-list"></ul>
           <div id="g-zones-wrap" hidden>
             <h4>Ease zones</h4>

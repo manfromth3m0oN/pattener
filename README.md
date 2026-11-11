@@ -94,6 +94,23 @@ laid out on its roll width (`layout_<sheet>.svg`). The materials list
 gives the length of each roll to buy, the area of the pieces, how much of
 the roll is used, and the cost.
 
+### Templates
+
+**Start from template** replaces the garment with one of these starting
+designs, built from the body's tape loops so they follow your measurements:
+
+| Template | Pieces | Construction |
+|---|---|---|
+| Short-sleeved top | front, back | shoulder and side seams; trimmed neckline, folded hem |
+| Leggings | one per leg | centre front and back, inside leg; folded waist |
+| Catsuit | left and right front and back | back zip from neck to crotch, seams over and under the arms, down the sides and inside legs; trimmed neckline |
+| Waist cincher | left and right front and back | back zip, side seams; trimmed top and bottom |
+
+Every curve stays editable: move points, add seams, change finishes.
+`cargo run -p latexpat-core --features serde,bundled-body --example
+gen_garment_examples` regenerates `web/examples/` from
+`garment::examples::TEMPLATES`.
+
 ### Construction and printing
 
 Select a curve to choose how it is made. A **seam** is glued (a lap seam:
@@ -123,7 +140,8 @@ sharp seam corners the way the maximum is.
 
 The preview shows the garment in latex colour and says how many flat
 pieces the seams make, or which piece still wraps around and needs a seam.
-**Load example top** gives a short-sleeved top to start from. Designs are
+**Start from template** gives a top, leggings, a catsuit or a waist cincher
+to start from (see Templates below). Designs are
 stored as positions on the body model's triangles, which are the same for
 every body, so a design follows the body when the measurements change.
 
@@ -345,4 +363,4 @@ flatten to sides 3.1 mm apart; matching removes the gap edge by edge
 Next, towards designing whole garments: full body from measurements with a
 3D view and project files (done); garments drawn on the body (done); fit
 tools (done); materials and colour (done); construction details and print output
-(done); templates.
+(done); templates (done). Later: posing the body.
