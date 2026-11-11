@@ -1219,6 +1219,21 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn every_template_makes_its_pieces() {
+        use super::examples::TEMPLATES;
+        let (mesh, tapes) = body();
+        for (t, pieces) in TEMPLATES.iter().zip([2, 2, 4, 4]) {
+            let g = build(&mesh, &(t.build)(&mesh, &tapes)).unwrap();
+            assert!(g.warnings.is_empty(), "{}: {:?}", t.id, g.warnings);
+            let faces = panel_faces(&g).unwrap();
+            let sizes: Vec<usize> = faces.iter().map(|f| f.len()).collect();
+            assert_eq!(sizes.len(), pieces, "{}: piece sizes {sizes:?}", t.id);
+            // No slivers where seams meet.
+            assert!(sizes.iter().all(|&n| n > 100), "{}: {sizes:?}", t.id);
+        }
+    }
+
+    #[test]
     fn unenclosed_garment_is_reported() {
         let (mesh, tapes) = body();
         let mut design = top(&mesh, &tapes);

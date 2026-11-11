@@ -52,9 +52,17 @@ const done = (p) => p.waitForFunction(
   const garmentReady = () => page.waitForFunction(
     () => /Ready|cannot|error/i.test(document.getElementById('g-status').textContent),
     null, { timeout: 60000 });
+  // Templates: the cincher makes four pieces; then work from the top.
+  await page.waitForFunction(() => document.querySelectorAll('#g-template option').length >= 4);
+  await page.selectOption('#g-template', 'cincher');
+  assert.match(await page.textContent('#g-template-note'), /back zip/);
   await page.click('#g-example');
+  await page.waitForFunction(() => design.curves.some((c) => c.name === 'bottom'));
   await garmentReady();
-  assert.match(await page.textContent('#g-status'), /2 flat pieces/);
+  assert.match(await page.textContent('#g-status'), /4 flat pieces/);
+  await page.selectOption('#g-template', 'top');
+  await page.click('#g-example');
+  await page.waitForFunction(() => /2 flat pieces/.test(document.getElementById('g-status').textContent), null, { timeout: 60000 });
   await page.click('#g-new-seam');
   await page.locator('#viewer').scrollIntoViewIfNeeded();
   const box = await page.locator('#viewer').boundingBox();

@@ -543,9 +543,27 @@ $('g-clear').onclick = () => {
   setPicking(null);
   changed();
 };
+// Template library: examples/index.json lists examples/<id>.project.json.
+let templates = [];
+(async () => {
+  try {
+    templates = await (await fetch('examples/index.json')).json();
+  } catch {
+    templates = [{ id: 'top', name: 'Short-sleeved top', description: '' }];
+  }
+  $('g-template').replaceChildren(...templates.map((t) => Object.assign(document.createElement('option'), { value: t.id, textContent: t.name })));
+  showTemplateNote();
+})();
+function showTemplateNote() {
+  const t = templates.find((x) => x.id === $('g-template').value);
+  $('g-template-note').textContent = t ? t.description : '';
+}
+$('g-template').onchange = showTemplateNote;
 $('g-example').onclick = async () => {
-  if (design.curves.length && !confirm('Replace the current garment with the example top?')) return;
-  const p = await (await fetch('examples/top.project.json')).json();
+  const id = $('g-template').value || 'top';
+  const name = (templates.find((t) => t.id === id) || { name: id }).name;
+  if (design.curves.length && !confirm(`Replace the current garment with the ${name.toLowerCase()} template?`)) return;
+  const p = await (await fetch(`examples/${id}.project.json`)).json();
   design = p.garment;
   design.zones = design.zones || [];
   design.sheet_assignments = design.sheet_assignments || [];
