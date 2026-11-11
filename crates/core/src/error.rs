@@ -74,6 +74,10 @@ pub enum Error {
         sheet_width: f64,
     },
 
+    /// Body measurements are invalid.
+    #[error("body: {0}")]
+    Body(String),
+
     /// Swatch calibration input is invalid.
     #[error("calibration: {0}")]
     Calibration(String),

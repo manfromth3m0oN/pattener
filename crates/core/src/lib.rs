@@ -28,6 +28,7 @@
 
 pub mod allowance;
 pub mod arap;
+pub mod body;
 pub mod calibrate;
 pub mod cut;
 pub mod ease;
