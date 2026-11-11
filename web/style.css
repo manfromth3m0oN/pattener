@@ -26,3 +26,18 @@ th:first-child, td:first-child { text-align: left; }
 .piece { border: 1px solid #e3e3e3; border-radius: 6px; padding: 0.5rem; text-align: center; }
 .piece img, #layout img { width: 100%; height: auto; background: white; }
 #layout img { max-height: 70vh; object-fit: contain; border: 1px solid #e3e3e3; }
+
+.project-bar { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 0.5rem; }
+.project-bar label { margin: 0; }
+.file-button { flex-direction: row; align-items: center; padding: 0.3rem 0.6rem; border: 1px solid #c8c8c8; border-radius: 5px; background: white; cursor: pointer; }
+.file-button input { display: none; }
+.body-layout { display: grid; grid-template-columns: minmax(280px, 1fr) minmax(320px, 1.2fr); gap: 1.5rem; }
+@media (max-width: 800px) { .body-layout { grid-template-columns: 1fr; } }
+.measure-grid, .shape-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 0 0.75rem; }
+.measure-grid label, .shape-grid label { margin-right: 0; }
+.measure-grid label span { border-bottom: 1px dotted #999; cursor: help; }
+.shape-grid input[type=range] { width: 100%; }
+#viewer { width: 100%; height: 520px; border: 1px solid #e3e3e3; border-radius: 6px; touch-action: none; display: block; }
+#fit-table td.off { color: #a14a00; font-weight: 600; }
+#fit-warnings li { color: #a14a00; }
+#body-downloads a { margin-right: 0.8rem; }

@@ -20,6 +20,193 @@ function call(request) {
   });
 }
 
+// ---- full body: measurements, shape, fitting, viewer -------------------------
+const MEASURES = [
+  ['height', 'Height', 'Standing straight without shoes: floor to the top of the head.'],
+  ['inseam', 'Inseam', 'Inside leg: floor to the crotch.'],
+  ['waist_height', 'Waist height', 'Floor to the natural waist (the narrowest point).'],
+  ['arm_length', 'Arm length', 'Shoulder point, over a slightly bent elbow, to the wrist bone.'],
+  ['neck', 'Neck', 'Around the base of the neck.'],
+  ['bust', 'Bust / chest', 'Around the fullest part of the bust or chest, tape level.'],
+  ['underbust', 'Underbust', 'Around the ribcage just below the bust.'],
+  ['waist', 'Waist', 'Around the narrowest part of the torso.'],
+  ['hips', 'Hips', 'Around the fullest part of the hips and buttocks.'],
+  ['thigh', 'Thigh', 'Around the fullest part of the thigh, just below the crotch.'],
+  ['knee', 'Knee', 'Around the middle of the knee.'],
+  ['calf', 'Calf', 'Around the fullest part of the calf.'],
+  ['ankle', 'Ankle', 'Around the narrowest part just above the ankle bone.'],
+  ['upper_arm', 'Upper arm', 'Around the fullest part of the upper arm.'],
+  ['wrist', 'Wrist', 'Around the wrist bone.'],
+];
+const SHAPES = [
+  ['body_type', 'Body type', 0, 1, 'feminine', 'masculine'],
+  ['muscle', 'Muscle', -1, 1, 'soft', 'muscular'],
+  ['cup', 'Cup', -1, 1, 'small', 'large'],
+  ['belly', 'Belly', -1, 1, 'flat', 'round'],
+  ['buttocks', 'Buttocks', -1, 1, 'flat', 'full'],
+];
+const UNIT_MM = { mm: 1, cm: 10, in: 25.4 };
+const FIT_WARNING_MM = 5;
+const LABEL = Object.fromEntries(MEASURES.map(([k, l]) => [k, l]));
+
+MEASURES.forEach(([key, label, hint]) => {
+  const l = document.createElement('label');
+  const span = document.createElement('span');
+  span.textContent = label;
+  span.title = hint;
+  const input = document.createElement('input');
+  input.type = 'number';
+  input.step = 'any';
+  input.min = '0';
+  input.id = `m-${key}`;
+  input.dataset.key = key;
+  l.append(span, input);
+  $('measure-inputs').appendChild(l);
+});
+SHAPES.forEach(([key, label, lo, hi, left, right]) => {
+  const l = document.createElement('label');
+  l.title = `${left} ↔ ${right}`;
+  const input = document.createElement('input');
+  Object.assign(input, { type: 'range', min: lo, max: hi, step: 0.05, value: 0, id: `s-${key}` });
+  l.append(document.createTextNode(label), input);
+  $('shape-inputs').appendChild(l);
+});
+
+let units = 'cm';
+function readBody() {
+  const measurements = {};
+  for (const [key] of MEASURES) {
+    const v = $(`m-${key}`).value.trim();
+    if (v !== '') measurements[key] = Number(v) * UNIT_MM[units];
+  }
+  const shape = Object.fromEntries(SHAPES.map(([k]) => [k, Number($(`s-${k}`).value)]));
+  return { measurements, shape };
+}
+function writeBody(body) {
+  for (const [key] of MEASURES) {
+    const mm = body.measurements?.[key];
+    $(`m-${key}`).value = mm === undefined ? '' : +(mm / UNIT_MM[units]).toFixed(units === 'mm' ? 0 : 1);
+  }
+  for (const [k] of SHAPES) $(`s-${k}`).value = body.shape?.[k] ?? 0;
+}
+$('units').onchange = () => {
+  const body = readBody();
+  units = $('units').value;
+  writeBody(body);
+  saveLocal();
+};
+
+const viewer = (() => {
+  try {
+    return new Viewer($('viewer'));
+  } catch (e) {
+    $('fit-status').textContent = `3D view unavailable: ${e.message}`;
+    return null;
+  }
+})();
+
+let fitting = false;
+let bodyUrl = null;
+async function fitBody() {
+  if (fitting) return;
+  fitting = true;
+  const status = $('fit-status');
+  status.className = '';
+  status.textContent = 'Fitting…';
+  $('fit-body').disabled = true;
+  try {
+    const body = readBody();
+    const r = await call({ command: 'human', body });
+    if (!r.ok) throw new Error(r.error);
+    const requested = new Set(Object.keys(body.measurements));
+    if (viewer) {
+      viewer.setMesh(new Float32Array(r.positions), new Uint32Array(r.triangles));
+      viewer.setLines(r.tapes.map((t) => ({
+        points: new Float32Array(t.points),
+        color: requested.has(t.kind) ? [0.9, 0.38, 0.0] : [0.55, 0.55, 0.6],
+      })));
+    }
+    const off = r.measured.filter((m) => m.requested != null && Math.abs(m.value - m.requested) > FIT_WARNING_MM);
+    table($('fit-table'), ['measurement', `wanted (${units})`, `body (${units})`],
+      r.measured.map((m) => [LABEL[m.kind],
+        m.requested == null ? '–' : f(m.requested / UNIT_MM[units], units === 'mm' ? 0 : 1),
+        f(m.value / UNIT_MM[units], units === 'mm' ? 0 : 1)]));
+    [...$('fit-table').rows].slice(1).forEach((row, i) => {
+      if (off.includes(r.measured[i])) row.cells[2].className = 'off';
+    });
+    $('fit-warnings').replaceChildren(...off.map((m) => {
+      const li = document.createElement('li');
+      li.textContent = `${LABEL[m.kind]} came out ${f(Math.abs(m.value - m.requested) / UNIT_MM[units], 1)} ${units} ` +
+        `${m.value > m.requested ? 'over' : 'under'}: the body model can't reach this combination. ` +
+        'Check the measurement, or try the shape sliders.';
+      return li;
+    }));
+    // Own URL: pattern results revoke theirs independently.
+    if (bodyUrl) URL.revokeObjectURL(bodyUrl);
+    bodyUrl = URL.createObjectURL(new Blob([r.obj], { type: 'text/plain' }));
+    const a = Object.assign(document.createElement('a'), { href: bodyUrl, download: 'body.obj', textContent: 'body.obj' });
+    $('body-downloads').replaceChildren(document.createTextNode('Download: '), a);
+    status.textContent = `Fitted in ${r.iterations} step(s).`;
+  } catch (e) {
+    status.className = 'error';
+    status.textContent = e.message || String(e);
+  } finally {
+    $('fit-body').disabled = false;
+    fitting = false;
+  }
+}
+$('fit-body').onclick = fitBody;
+
+// ---- project: save, open, autosave ----------------------------------------------
+const STORAGE_KEY = 'latexpat.project';
+const EXAMPLE_BODY = {
+  measurements: { height: 1680, bust: 940, underbust: 790, waist: 740, hips: 980, thigh: 570 },
+  shape: {},
+};
+function readProject() {
+  return { version: 1, name: $('project-name').value.trim() || 'Untitled', body: readBody(), units };
+}
+function writeProject(p) {
+  $('project-name').value = p.name || 'Untitled';
+  units = UNIT_MM[p.units] ? p.units : 'cm';
+  $('units').value = units;
+  writeBody(p.body || {});
+}
+function saveLocal() {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(readProject()));
+    $('project-status').textContent = 'Saved in this browser.';
+  } catch {
+    $('project-status').textContent = '';
+  }
+}
+$('project-name').oninput = saveLocal;
+$('measure-inputs').oninput = saveLocal;
+$('shape-inputs').oninput = saveLocal;
+$('project-save').onclick = () => {
+  const p = readProject();
+  const a = fileLink(`${p.name.replace(/[^\w.-]+/g, '_')}.latexpat.json`, JSON.stringify(p, null, 2), 'application/json');
+  a.click();
+};
+$('project-open').onchange = async () => {
+  const text = await readFile($('project-open'));
+  $('project-open').value = '';
+  if (!text) return;
+  try {
+    writeProject(JSON.parse(text));
+    saveLocal();
+    fitBody();
+  } catch (e) {
+    $('project-status').textContent = `Could not open: ${e.message}`;
+  }
+};
+$('project-new').onclick = () => {
+  if (!confirm('Start a new project? Unsaved changes to this one will be lost.')) return;
+  writeProject({ name: 'Untitled', body: { measurements: {}, shape: {} }, units });
+  saveLocal();
+  fitBody();
+};
+
 // ---- measurement table ----------------------------------------------------
 const DEFAULT_LEVELS = [
   ['hip', 0, 980, '', ''],
@@ -66,13 +253,16 @@ function readLevels() {
 }
 
 // ---- source toggle ----------------------------------------------------------
-document.querySelectorAll('input[name=source]').forEach((r) => {
-  r.onchange = () => {
-    const measure = document.querySelector('input[name=source]:checked').value === 'measure';
-    $('measure-panel').hidden = !measure;
-    $('upload-panel').hidden = measure;
-  };
-});
+const source = () => document.querySelector('input[name=source]:checked').value;
+function showSource() {
+  const s = source();
+  $('human-panel').hidden = s !== 'human';
+  $('measure-panel').hidden = s !== 'measure';
+  $('upload-panel').hidden = s !== 'upload';
+  $('run').disabled = s === 'human';
+  $('run-note').hidden = s !== 'human';
+}
+document.querySelectorAll('input[name=source]').forEach((r) => { r.onchange = showSource; });
 
 const readFile = (input) => (input.files[0] ? input.files[0].text() : Promise.resolve(null));
 const num = (id) => Number($(id).value);
@@ -156,7 +346,7 @@ async function run() {
   try {
     let obj, seams, scale = 1, up = [0, 1, 0];
     const extra = [];
-    if (document.querySelector('input[name=source]:checked').value === 'measure') {
+    if (source() === 'measure') {
       const body = await call({
         command: 'body',
         measurements: { levels: readLevels() },
@@ -201,7 +391,18 @@ async function run() {
     status.className = 'error';
     status.textContent = e.message || String(e);
   } finally {
-    $('run').disabled = false;
+    $('run').disabled = source() === 'human';
   }
 }
 $('run').onclick = run;
+
+// ---- start ----------------------------------------------------------------------
+(() => {
+  let saved = null;
+  try {
+    saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
+  } catch { /* ignore */ }
+  writeProject(saved || { name: 'Example', body: EXAMPLE_BODY, units: 'cm' });
+  showSource();
+  fitBody();
+})();

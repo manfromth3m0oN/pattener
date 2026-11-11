@@ -9,19 +9,49 @@
 <body>
 <header>
   <h1>latexpat</h1>
-  <p>Sewing-free patterns for latex garments: from measurements or a 3D body to printable, glue-ready pieces. Everything runs in your browser.</p>
+  <p>Patterns for latex garments: from your measurements to printable, glue-ready pieces. Everything runs in your browser.</p>
+  <div class="project-bar">
+    <label>Project <input type="text" id="project-name" value="Untitled"></label>
+    <button type="button" id="project-new">New</button>
+    <label class="file-button">Open… <input type="file" id="project-open" accept=".json"></label>
+    <button type="button" id="project-save">Save</button>
+    <span id="project-status" class="hint"></span>
+  </div>
 </header>
 
 <main>
   <section>
     <h2>1. Body</h2>
     <div class="tabs" role="radiogroup">
-      <label><input type="radio" name="source" value="measure" checked> From measurements</label>
+      <label><input type="radio" name="source" value="human" checked> Full body</label>
+      <label><input type="radio" name="source" value="measure"> Quick torso</label>
       <label><input type="radio" name="source" value="upload"> Upload a mesh</label>
     </div>
 
-    <div id="measure-panel">
-      <p class="hint">Bottom to top. Heights are above the lowest level, all in millimetres. Front bias above 0.5 adds bust or belly projection.</p>
+    <div id="human-panel" class="body-layout">
+      <div class="body-inputs">
+        <p class="hint">Fill in what you have; the rest is estimated. Hover a name for how to measure it.</p>
+        <label>Units
+          <select id="units"><option value="cm">cm</option><option value="mm">mm</option><option value="in">inches</option></select>
+        </label>
+        <div id="measure-inputs" class="measure-grid"></div>
+        <h3>Shape</h3>
+        <p class="hint">A tape measure can't see these, so set them by eye.</p>
+        <div id="shape-inputs" class="shape-grid"></div>
+        <button type="button" id="fit-body" class="primary">Update body</button>
+        <span id="fit-status" role="status"></span>
+      </div>
+      <div class="body-view">
+        <canvas id="viewer" aria-label="3D view of the body"></canvas>
+        <p class="hint">Drag to turn, scroll to zoom, double-click to reset. Orange lines show where each supplied girth is measured.</p>
+        <ul id="fit-warnings"></ul>
+        <table id="fit-table"></table>
+        <div id="body-downloads"></div>
+      </div>
+    </div>
+
+    <div id="measure-panel" hidden>
+      <p class="hint">A simple lofted torso: bottom to top, heights above the lowest level, all in millimetres. Front bias above 0.5 adds bust or belly projection.</p>
       <table id="levels">
         <thead><tr><th>Level</th><th>Height</th><th>Circumference</th><th>Depth ratio</th><th>Front bias</th><th></th></tr></thead>
         <tbody></tbody>
@@ -45,7 +75,7 @@
     </div>
   </section>
 
-  <section>
+<section>
     <h2>2. Latex and pattern</h2>
     <div class="grid">
       <label>Ease <input type="number" id="ease" value="0.85" step="0.01" min="0.5" max="1"></label>
@@ -72,6 +102,7 @@
   <section>
     <button type="button" id="run" class="primary">Make pattern</button>
     <span id="status" role="status"></span>
+    <p id="run-note" class="hint" hidden>Drawing a garment on the full body is the next step in development. For now, make patterns from the quick torso or an uploaded mesh.</p>
   </section>
 
   <section id="results" hidden>
@@ -87,6 +118,7 @@
     <p class="hint">Print SVGs at 100 % and check the 50 mm scale bar. Mark notches with a pen; snipping latex starts tears.</p>
   </section>
 </main>
+<script src="viewer.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

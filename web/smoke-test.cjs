@@ -11,13 +11,36 @@ const done = (p) => p.waitForFunction(
   null, { timeout: 60000 });
 
 (async () => {
-  const browser = await chromium.launch();
+  const browser = await chromium.launch({ args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
   const page = await browser.newPage();
   const errors = [];
   page.on('pageerror', (e) => errors.push(String(e)));
   await page.goto(url);
 
-  // 1. Torso from the default measurements, with heatmap and sheet layout.
+  // 0. Full body (the default): the example project fits without warnings.
+  const fitted = () => page.waitForFunction(
+    () => /Fitted|error|unavailable/i.test(document.getElementById('fit-status').textContent)
+      && !document.getElementById('fit-body').disabled,
+    null, { timeout: 60000 });
+  await page.evaluate(() => localStorage.clear());
+  await page.reload();
+  await fitted();
+  assert.match(await page.textContent('#fit-status'), /Fitted/);
+  assert.equal(await page.locator('#fit-warnings li').count(), 0);
+  assert.equal(await page.locator('#fit-table tr').count(), 16);
+  assert.ok(await page.isDisabled('#run'));
+  // An unreachable combination is flagged, and the project autosaves.
+  await page.fill('#m-underbust', '120');
+  await page.click('#fit-body');
+  await fitted();
+  assert.ok(await page.locator('#fit-warnings li').count() > 0);
+  await page.reload();
+  await fitted();
+  assert.equal(await page.inputValue('#m-underbust'), '120');
+  await page.evaluate(() => localStorage.clear());
+
+  // 1. Quick torso from the default measurements, with heatmap and sheet layout.
+  await page.check('input[name=source][value=measure]');
   await page.selectOption('#heatmap', 'max_stretch');
   await page.fill('#sheet-width', '1000');
   await page.click('#run');
