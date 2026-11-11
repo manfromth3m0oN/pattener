@@ -4,6 +4,13 @@
 //! each target flat edge length is `s ×` its 3D length. Pulling the flat
 //! piece onto the body then stretches it by roughly `1/s`.
 //!
+//! ## Around and along the body
+//! Latex is usually reduced much more around the body than along it:
+//! lengthwise stretch drags at the shoulders and crotch. With a *length
+//! relief* `r ∈ [0, 1]` the reduction along the body is `r` times the
+//! reduction around it, `s_len = 1 − r (1 − s)`; `r = 1` is the same in
+//! both directions. See [`reference_triangles`].
+//!
 //! `s` is defined per input-mesh triangle so that later milestones (swatch
 //! calibration per sheet thickness, local reinforcement, graded ease) only
 //! need to produce a vector of values; nothing downstream changes.
@@ -13,6 +20,7 @@ use crate::error::{Error, Result};
 use crate::mesh::Mesh;
 use crate::panel::Panel;
 use crate::seams::SeamSet;
+use glam::{DVec2, DVec3};
 
 /// Ease specification for a whole garment.
 #[derive(Debug, Clone, PartialEq)]
@@ -77,6 +85,52 @@ impl Ease {
         }
         Ok(values)
     }
+}
+
+/// Reference (target) flat shapes of a panel's triangles for ARAP.
+///
+/// Each 3D triangle is laid flat isometrically in its own frame (`e₁` along
+/// its first edge, `e₂ = n × e₁`) and scaled by
+/// ```text
+/// M = s_len d dᵀ + s d⊥ d⊥ᵀ,    s_len = 1 − r (1 − s),
+/// ```
+/// where `s` is the triangle's ease (around the body), `r` the length
+/// relief, and `d` the "along the body" direction projected into the
+/// triangle (`d⊥` its in-plane perpendicular). `along[t]` is that 3D
+/// direction per local triangle; with `None`, or where it is nearly normal
+/// to the triangle (less than 30 % of it in plane), the scaling is uniform
+/// in `s`.
+pub fn reference_triangles(
+    panel: &Panel,
+    ease: &[f64],
+    relief: f64,
+    along: Option<&[DVec3]>,
+) -> Vec<[DVec2; 3]> {
+    panel
+        .triangles
+        .iter()
+        .enumerate()
+        .map(|(t, tri)| {
+            let p = tri.map(|i| panel.positions[i as usize]);
+            let q = crate::linalg::triangle_frame(p);
+            let s = ease[t];
+            let s_len = 1.0 - relief * (1.0 - s);
+            let dir = along.and_then(|a| {
+                let e1 = (p[1] - p[0]).normalize();
+                let n = (p[1] - p[0]).cross(p[2] - p[0]).normalize();
+                let e2 = n.cross(e1);
+                let d = DVec2::new(a[t].dot(e1), a[t].dot(e2));
+                (d.length() > 0.3 * a[t].length()).then(|| d.normalize())
+            });
+            match dir {
+                Some(d) if (s_len - s).abs() > 1e-12 => {
+                    let dp = d.perp();
+                    q.map(|x| s_len * x.dot(d) * d + s * x.dot(dp) * dp)
+                }
+                _ => q.map(|x| x * s),
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]

@@ -50,6 +50,10 @@ pub struct StrainReport {
     ///
     /// [`max_stretch`]: StrainReport::max_stretch
     pub p95_stretch: f64,
+    /// Fraction of the piece's body area where some direction is slack
+    /// (`σ_min < 0.99`): there the latex is not stretched in every
+    /// direction and may wrinkle.
+    pub slack_fraction: f64,
     /// Body-area-weighted mean of the area stretch `σ_min σ_max`.
     pub mean_area_stretch: f64,
     /// 3D surface area (mm²).
@@ -107,17 +111,27 @@ pub fn measure(panel: &Panel, uv: &[DVec2]) -> StrainReport {
         triangles.push(s);
     }
     let p95_stretch = area_percentile(&triangles, &areas, 0.95);
+    let slack: f64 = triangles
+        .iter()
+        .zip(&areas)
+        .filter(|(s, _)| s.min < SLACK)
+        .map(|(_, a)| a)
+        .sum();
     StrainReport {
         triangles,
         flipped,
         min_stretch: min_s,
         max_stretch: max_s,
         p95_stretch,
+        slack_fraction: slack / body_area,
         mean_area_stretch: weighted / body_area,
         body_area,
         flat_area,
     }
 }
+
+/// Minimum stretch below which a triangle counts as slack.
+const SLACK: f64 = 0.99;
 
 /// The value of `σ_max` below which a fraction `q` of the total area lies:
 /// sort triangles by `σ_max` and accumulate their areas until `q` of the

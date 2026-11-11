@@ -56,6 +56,13 @@ pub struct JobOptions {
     pub heatmap_range: f64,
     /// Lay pieces out on a sheet.
     pub sheet: Option<NestOptions>,
+    /// Fraction of the around-the-body reduction applied along the body
+    /// (1 = the same in both directions; 0.3–0.5 is typical for latex).
+    pub length_relief: f64,
+    /// "Along the body" per mesh triangle (set by callers that know the
+    /// body, e.g. from its bones); `None` uses `up`.
+    #[cfg_attr(feature = "serde", serde(skip))]
+    pub along: Option<Vec<DVec3>>,
 }
 
 impl Default for JobOptions {
@@ -70,6 +77,8 @@ impl Default for JobOptions {
             heatmap: None,
             heatmap_range: 1.5,
             sheet: None,
+            length_relief: 1.0,
+            along: None,
         }
     }
 }
@@ -89,6 +98,8 @@ pub struct PanelReport {
     pub max_stretch: f64,
     /// 95 % of the piece's area stretches less than this.
     pub p95_stretch: f64,
+    /// Fraction of the piece's area that is slack in some direction.
+    pub slack_fraction: f64,
     pub mean_area_stretch: f64,
     pub body_area_mm2: f64,
     pub flat_area_mm2: f64,
@@ -215,6 +226,8 @@ pub fn run(mesh: &Mesh, seams: &SeamSet, opts: &JobOptions) -> Result<JobOutput>
         up: opts.up,
         seam_matching: opts.seam_matching,
         panel_stiffness: stiffness,
+        length_relief: opts.length_relief,
+        along: opts.along.clone(),
     };
     let garment = flatten_garment(mesh, seams, &fopts)?;
     let pieces = build_pattern(&garment, seams, &opts.pattern);
@@ -274,6 +287,7 @@ pub fn run(mesh: &Mesh, seams: &SeamSet, opts: &JobOptions) -> Result<JobOutput>
             min_stretch: s.min_stretch,
             max_stretch: s.max_stretch,
             p95_stretch: s.p95_stretch,
+            slack_fraction: s.slack_fraction,
             mean_area_stretch: s.mean_area_stretch,
             body_area_mm2: s.body_area,
             flat_area_mm2: s.flat_area,
