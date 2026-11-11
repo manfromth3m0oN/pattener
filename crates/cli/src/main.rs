@@ -7,9 +7,12 @@
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use latexpat_core::arap::ArapOptions;
-use latexpat_core::glam::DVec3;
+use latexpat_core::glam::{DVec2, DVec3};
+use latexpat_core::nest::{nest, Layout, NestOptions};
 use latexpat_core::obj::parse_obj;
-use latexpat_core::svg::{panel_svg, EdgeLabel, HeatmapMetric, SvgOptions};
+use latexpat_core::pattern::{build_pattern, PatternOptions};
+use latexpat_core::seams::AllowanceSide;
+use latexpat_core::svg::{layout_svg, panel_svg, EdgeLabel, HeatmapMetric, SvgOptions};
 use latexpat_core::{
     flatten_garment, Ease, FlatPanel, FlattenOptions, SeamMatching, SeamReport, SeamSet,
 };
@@ -74,6 +77,46 @@ struct FlattenArgs {
     /// Warn when the two sides of a seam differ by more than this (mm).
     #[arg(long, default_value_t = 1.0)]
     seam_tolerance: f64,
+    /// Glue overlap added to one side of each seam (mm).
+    #[arg(long, default_value_t = 6.0)]
+    glue_allowance: f64,
+    /// Which side of a seam carries the glue overlap (seams can override this).
+    #[arg(long, value_enum, default_value_t = Side::Left)]
+    allowance_side: Side,
+    /// Allowance on open edges such as hems and necklines (mm).
+    #[arg(long, default_value_t = 0.0)]
+    hem_allowance: f64,
+    /// Body distance between automatic notches (mm); 0 for explicit notches only.
+    #[arg(long, default_value_t = 50.0)]
+    notch_spacing: f64,
+    /// Lay all pieces out on a sheet of this width (mm) and write layout.svg.
+    #[arg(long)]
+    sheet_width: Option<f64>,
+    /// Gap between pieces on the sheet (mm).
+    #[arg(long, default_value_t = 5.0)]
+    sheet_gap: f64,
+    /// Do not rotate pieces by 90° when laying them out.
+    #[arg(long)]
+    no_rotate: bool,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum Side {
+    Left,
+    Right,
+    Both,
+    None,
+}
+
+impl From<Side> for AllowanceSide {
+    fn from(s: Side) -> Self {
+        match s {
+            Side::Left => AllowanceSide::Left,
+            Side::Right => AllowanceSide::Right,
+            Side::Both => AllowanceSide::Both,
+            Side::None => AllowanceSide::None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -118,6 +161,16 @@ struct Report {
     scale: f64,
     panels: Vec<PanelReport>,
     seams: Vec<SeamPairReport>,
+    layout: Option<LayoutReport>,
+}
+
+#[derive(Serialize)]
+struct LayoutReport {
+    file: String,
+    sheet_width_mm: f64,
+    length_mm: f64,
+    utilisation: f64,
+    placements: Vec<latexpat_core::nest::Placement>,
 }
 
 #[derive(Serialize)]
@@ -147,6 +200,9 @@ struct PanelReport {
     flat_area_mm2: f64,
     flat_width_mm: f64,
     flat_height_mm: f64,
+    cut_width_mm: f64,
+    cut_height_mm: f64,
+    notches: Vec<u32>,
     flipped_triangles: Vec<u32>,
     arap_iterations: usize,
 }
@@ -163,6 +219,16 @@ fn flatten(args: FlattenArgs) -> Result<()> {
     }
     if !(args.scale > 0.0 && args.scale.is_finite()) {
         bail!("--scale must be a positive number");
+    }
+    for (name, v) in [
+        ("--glue-allowance", args.glue_allowance),
+        ("--hem-allowance", args.hem_allowance),
+        ("--notch-spacing", args.notch_spacing),
+        ("--sheet-gap", args.sheet_gap),
+    ] {
+        if !(v >= 0.0 && v.is_finite()) {
+            bail!("{name} must be zero or a positive number");
+        }
     }
     if !(args.heatmap_range > 1.0) {
         bail!("--heatmap-range must be greater than 1");
@@ -194,6 +260,16 @@ fn flatten(args: FlattenArgs) -> Result<()> {
     };
     let garment = flatten_garment(&mesh, &seams, &opts)?;
     let panels = &garment.panels;
+    let pieces = build_pattern(
+        &garment,
+        &seams,
+        &PatternOptions {
+            seam_allowance: args.glue_allowance,
+            allowance_side: args.allowance_side.into(),
+            hem_allowance: args.hem_allowance,
+            notch_spacing: (args.notch_spacing > 0.0).then_some(args.notch_spacing),
+        },
+    );
 
     fs::create_dir_all(&args.output)
         .with_context(|| format!("creating {}", args.output.display()))?;
@@ -209,6 +285,7 @@ fn flatten(args: FlattenArgs) -> Result<()> {
         scale: args.scale,
         panels: vec![],
         seams: vec![],
+        layout: None,
     };
     println!(
         "{:<10} {:>6} {:>9} {:>9} {:>9} {:>17}  seams",
@@ -224,6 +301,7 @@ fn flatten(args: FlattenArgs) -> Result<()> {
         };
         let svg = panel_svg(
             fp,
+            &pieces[i],
             &SvgOptions {
                 heatmap,
                 range: args.heatmap_range,
@@ -234,10 +312,12 @@ fn flatten(args: FlattenArgs) -> Result<()> {
         );
         write(&args.output.join(&file), &svg)?;
 
-        let size = fp
-            .uv
-            .iter()
-            .fold(latexpat_core::glam::DVec2::ZERO, |m, p| m.max(*p));
+        let size = fp.uv.iter().fold(DVec2::ZERO, |m, p| m.max(*p));
+        let cut_size = {
+            let o = &pieces[i].cut_outline;
+            let lo = o.iter().fold(DVec2::splat(f64::INFINITY), |m, p| m.min(*p));
+            o.iter().fold(DVec2::ZERO, |m, p| m.max(*p - lo))
+        };
         let s = &fp.strain;
         println!(
             "{:<10} {:>6} {:>9.4} {:>9.4} {:>9.4} {:>8.1} × {:<6.1}  {}",
@@ -250,6 +330,12 @@ fn flatten(args: FlattenArgs) -> Result<()> {
             size.y,
             names.join(", ")
         );
+        if !pieces[i].cut_outline_simple {
+            eprintln!(
+                "warning: panel {i}: the allowance makes the cut line cross itself \
+                 (an edge curves inwards more tightly than the allowance); check the SVG"
+            );
+        }
         if !s.flipped.is_empty() {
             eprintln!(
                 "warning: panel {i} has {} flipped triangle(s) in the flat layout",
@@ -269,6 +355,9 @@ fn flatten(args: FlattenArgs) -> Result<()> {
             flat_area_mm2: s.flat_area,
             flat_width_mm: size.x,
             flat_height_mm: size.y,
+            cut_width_mm: cut_size.x,
+            cut_height_mm: cut_size.y,
+            notches: pieces[i].notches.iter().map(|n| n.number).collect(),
             flipped_triangles: s.flipped.clone(),
             arap_iterations: fp.arap_iterations,
         });
@@ -311,6 +400,37 @@ fn flatten(args: FlattenArgs) -> Result<()> {
             right_length_mm: sr.lengths.right,
             mismatch_mm: sr.lengths.mismatch(),
             mismatch_before_matching_mm: sr.unmatched.mismatch(),
+        });
+    }
+
+    if let Some(width) = args.sheet_width {
+        let outlines: Vec<_> = pieces.iter().map(|p| p.cut_outline.clone()).collect();
+        let layout: Layout = nest(
+            &outlines,
+            &NestOptions {
+                sheet_width: width,
+                gap: args.sheet_gap,
+                allow_rotation: !args.no_rotate,
+            },
+        )?;
+        let labels: Vec<String> = (0..pieces.len()).map(|i| format!("panel {i}")).collect();
+        write(
+            &args.output.join("layout.svg"),
+            &layout_svg(&outlines, &labels, &layout),
+        )?;
+        println!();
+        println!(
+            "layout: {:.0} mm of {:.0} mm wide sheet ({:.0}% used) → layout.svg",
+            layout.length,
+            width,
+            100.0 * layout.utilisation
+        );
+        report.layout = Some(LayoutReport {
+            file: "layout.svg".into(),
+            sheet_width_mm: width,
+            length_mm: layout.length,
+            utilisation: layout.utilisation,
+            placements: layout.placements,
         });
     }
 

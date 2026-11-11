@@ -7,13 +7,29 @@ use std::f64::consts::{PI, TAU};
 use std::path::Path;
 
 fn seams_json(seams: &[(&str, Vec<u32>)]) -> String {
+    let with: Vec<(&str, Vec<u32>, Vec<u32>)> =
+        seams.iter().map(|(n, v)| (*n, v.clone(), vec![])).collect();
+    seams_json_with_notches(&with)
+}
+
+fn seams_json_with_notches(seams: &[(&str, Vec<u32>, Vec<u32>)]) -> String {
+    let list = |v: &[u32]| {
+        v.iter()
+            .map(|i| i.to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
     let items: Vec<String> = seams
         .iter()
-        .map(|(name, v)| {
-            let vs: Vec<String> = v.iter().map(|i| i.to_string()).collect();
+        .map(|(name, v, n)| {
+            let notches = if n.is_empty() {
+                String::new()
+            } else {
+                format!(", \"notches\": [{}]", list(n))
+            };
             format!(
-                "    {{ \"name\": \"{name}\", \"vertices\": [{}] }}",
-                vs.join(", ")
+                "    {{ \"name\": \"{name}\", \"vertices\": [{}]{notches} }}",
+                list(v)
             )
         })
         .collect();
@@ -31,9 +47,11 @@ fn main() {
     // 200 × 160 mm flat sheet, split down the middle.
     let (nx, ny) = (10, 8);
     write("grid.obj", write_obj(&testmesh::grid(nx, ny, 20.0)));
+    // Explicit notch at vertex (5, 2), 40 mm up the seam.
+    let centre: Vec<u32> = (0..=ny).map(|j| j * (nx + 1) + 5).collect();
     write(
         "grid.seams.json",
-        seams_json(&[("centre", (0..=ny).map(|j| j * (nx + 1) + 5).collect())]),
+        seams_json_with_notches(&[("centre", centre, vec![2 * (nx + 1) + 5])]),
     );
 
     // Tube r = 60 mm, h = 150 mm (Z up), opened by one seam.

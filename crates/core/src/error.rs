@@ -39,6 +39,10 @@ pub enum Error {
     #[error("seam {seam}: vertices {a} and {b} are not joined by a mesh edge")]
     SeamNotAnEdge { seam: usize, a: u32, b: u32 },
 
+    /// A notch vertex is not on its seam.
+    #[error("seam {seam}: notch vertex {vertex} is not on the seam")]
+    NotchNotOnSeam { seam: usize, vertex: u32 },
+
     /// A panel produced by cutting is not a topological disc.
     #[error(
         "panel {panel} is not a topological disc (Euler characteristic {euler_characteristic}, \
@@ -57,6 +61,18 @@ pub enum Error {
     /// The ease specification does not match the panel.
     #[error("ease: {0}")]
     InvalidEase(String),
+
+    /// A piece is wider than the sheet in every allowed orientation.
+    #[error(
+        "piece {piece} ({width:.0} × {height:.0} mm) does not fit a {sheet_width:.0} mm sheet; \
+         allow rotation, use a wider sheet, or add a seam to split it"
+    )]
+    PieceTooWide {
+        piece: usize,
+        width: f64,
+        height: f64,
+        sheet_width: f64,
+    },
 
     /// A sparse linear solve failed (usually a degenerate panel).
     #[error("linear solve failed: {0}")]

@@ -14,8 +14,8 @@ fn flatten(mesh: &Mesh, seams: Vec<Vec<u32>>) -> Vec<FlatPanel> {
         seams: seams
             .into_iter()
             .map(|v| Seam {
-                name: None,
                 vertices: v,
+                ..Default::default()
             })
             .collect(),
     };

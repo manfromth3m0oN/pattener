@@ -217,8 +217,8 @@ mod tests {
             seams: seams
                 .into_iter()
                 .map(|v| Seam {
-                    name: None,
                     vertices: v,
+                    ..Default::default()
                 })
                 .collect(),
         };
