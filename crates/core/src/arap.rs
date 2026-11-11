@@ -3,10 +3,11 @@
 //! Mesh Parameterization").
 //!
 //! ## Energy
-//! Each triangle `T` has a reference shape `x_T = s_T · frame(T)`: the 3D
-//! triangle laid flat isometrically and scaled by its ease factor `s_T`.
+//! Each triangle `T` has a reference shape `x_T`: the 3D triangle laid flat
+//! isometrically and scaled by its ease (uniformly, or differently around
+//! and along the body: see [`reference_triangles`](crate::ease::reference_triangles)).
 //! With cotangent weights `w_ij = cot θ_ij` (angle opposite edge `ij` in
-//! the reference triangle, which `s_T` leaves unchanged) the energy is
+//! the reference triangle) the energy is
 //! ```text
 //! E(u, R) = ½ Σ_T Σ_(i,j)∈T  w_ij ‖(u_i − u_j) − R_T (x_i − x_j)‖²
 //! ```
@@ -30,7 +31,7 @@
 //! `max_iterations`.
 
 use crate::error::Result;
-use crate::linalg::{closest_rotation, cot_at, triangle_frame, SymBuilder};
+use crate::linalg::{closest_rotation, cot_at, SymBuilder};
 use crate::panel::Panel;
 use glam::DVec2;
 
@@ -81,9 +82,10 @@ struct Spring {
     w: f64,
 }
 
-/// Refine `init` (e.g. from LSCM) towards reference triangles scaled by
-/// `ease` (one value per local triangle), with optional edge-length
-/// targets.
+/// Refine `init` (e.g. from LSCM) towards the reference triangles `refs`
+/// (one per local triangle, built by
+/// [`reference_triangles`](crate::ease::reference_triangles)), with
+/// optional edge-length targets.
 ///
 /// ## Edge-length targets
 /// Each [`EdgeTarget`] adds `½ λ ‖(u_a − u_b) − d‖²` to the energy. The
@@ -94,23 +96,18 @@ struct Spring {
 /// only once.
 pub fn arap(
     panel: &Panel,
-    ease: &[f64],
+    refs: &[[DVec2; 3]],
     init: &[DVec2],
     opts: &ArapOptions,
     targets: &[EdgeTarget],
 ) -> Result<ArapResult> {
-    assert_eq!(ease.len(), panel.triangles.len());
+    assert_eq!(refs.len(), panel.triangles.len());
     assert_eq!(init.len(), panel.vertex_count());
     let n = panel.vertex_count();
 
-    // Reference shapes and cotangent weights. `w[t][k]` weighs edge
-    // (k+1, k+2), opposite corner k.
-    let refs: Vec<[DVec2; 3]> = panel
-        .triangles
-        .iter()
-        .zip(ease)
-        .map(|(t, &s)| triangle_frame(t.map(|i| panel.positions[i as usize])).map(|q| q * s))
-        .collect();
+    // Cotangent weights of the reference shapes (see
+    // [`reference_triangles`](crate::ease::reference_triangles)). `w[t][k]`
+    // weighs edge (k+1, k+2), opposite corner k.
     let w: Vec<[f64; 3]> = refs
         .iter()
         .map(|q| std::array::from_fn(|k| cot_at(*q, k)))
@@ -247,14 +244,8 @@ mod tests {
             .remove(0);
         let init = lscm(&p).unwrap();
         let s = 0.85;
-        let r = arap(
-            &p,
-            &vec![s; p.triangles.len()],
-            &init,
-            &ArapOptions::default(),
-            &[],
-        )
-        .unwrap();
+        let refs = crate::ease::reference_triangles(&p, &vec![s; p.triangles.len()], 1.0, None);
+        let r = arap(&p, &refs, &init, &ArapOptions::default(), &[]).unwrap();
         assert!(r.energy < 1e-16, "energy {}", r.energy);
         for t in &p.triangles {
             for k in 0..3 {

@@ -1,0 +1,22 @@
+[
+  {
+    "description": "Front and back joined at the shoulders and sides; trimmed neckline, folded hem at the hips.",
+    "id": "top",
+    "name": "Short-sleeved top"
+  },
+  {
+    "description": "One piece per leg, joined at centre front and back, with an inside-leg seam; folded waist hem.",
+    "id": "leggings",
+    "name": "Leggings"
+  },
+  {
+    "description": "Neck to wrists and ankles in four pieces, with a back zip from neck to crotch and seams over and under the arms, down the sides and the inside legs.",
+    "id": "catsuit",
+    "name": "Catsuit"
+  },
+  {
+    "description": "Underbust to hips in four pieces with a back zip; both edges trimmed.",
+    "id": "cincher",
+    "name": "Waist cincher"
+  }
+]

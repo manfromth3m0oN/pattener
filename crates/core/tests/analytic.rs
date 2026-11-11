@@ -203,3 +203,40 @@ fn spherical_cap_is_rotationally_symmetric() {
         }
     }
 }
+
+#[test]
+fn tube_with_length_relief_stretches_only_around() {
+    // Tube along Z, opened by one seam; reduce around the body only (r = 0)
+    // and by half as much along it (r = 0.5).
+    let (r, h, n, up) = (60.0, 150.0, 48u32, 10u32);
+    let m = testmesh::cylinder(r, h, n, up, TAU);
+    let set = SeamSet {
+        seams: vec![Seam {
+            vertices: (0..=up).map(|j| j * n).collect(),
+            ..Default::default()
+        }],
+    };
+    for relief in [0.0, 0.5] {
+        let opts = FlattenOptions {
+            ease: Ease::Uniform(S),
+            up: DVec3::Z,
+            length_relief: relief,
+            ..Default::default()
+        };
+        let fp = &flatten_garment(&m, &set, &opts).unwrap().panels[0];
+        assert!(fp.strain.flipped.is_empty());
+        let s_len = 1.0 - relief * (1.0 - S);
+        for s in &fp.strain.triangles {
+            assert_relative_eq!(s.max, 1.0 / S, epsilon = 1e-6);
+            assert_relative_eq!(s.min, 1.0 / s_len, epsilon = 1e-6);
+        }
+        // The piece is upright (up = Z), so its flat height is s_len × h.
+        let (lo, hi) = fp
+            .uv
+            .iter()
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(l, u), p| {
+                (l.min(p.y), u.max(p.y))
+            });
+        assert_relative_eq!(hi - lo, s_len * h, epsilon = 1e-6);
+    }
+}

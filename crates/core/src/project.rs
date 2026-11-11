@@ -12,6 +12,7 @@
 
 use crate::garment::GarmentDesign;
 use crate::human::{Measurements, ShapeOptions};
+use crate::materials::Sheet;
 
 /// Current project file version.
 pub const PROJECT_VERSION: u32 = 1;
@@ -36,6 +37,8 @@ pub struct Project {
     pub body: BodySpec,
     /// The garment drawn on the body.
     pub garment: GarmentDesign,
+    /// The latex sheets available for this garment.
+    pub materials: Vec<Sheet>,
 }
 
 impl Default for Project {
@@ -45,6 +48,7 @@ impl Default for Project {
             name: "Untitled".into(),
             body: BodySpec::default(),
             garment: GarmentDesign::default(),
+            materials: Vec::new(),
         }
     }
 }
