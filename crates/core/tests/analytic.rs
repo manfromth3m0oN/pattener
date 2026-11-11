@@ -2,20 +2,37 @@
 
 use approx::assert_relative_eq;
 use glam::DVec3;
-use latexpat_core::{flatten_garment, testmesh, Ease, FlatPanel, FlattenOptions, Mesh, Seam, SeamSet};
+use latexpat_core::{
+    flatten_garment, testmesh, Ease, FlatPanel, FlattenOptions, Mesh, Seam, SeamSet,
+};
 use std::f64::consts::{PI, TAU};
 
 const S: f64 = 0.85;
 
 fn flatten(mesh: &Mesh, seams: Vec<Vec<u32>>) -> Vec<FlatPanel> {
-    let set = SeamSet { seams: seams.into_iter().map(|v| Seam { name: None, vertices: v }).collect() };
-    let opts = FlattenOptions { ease: Ease::Uniform(S), ..Default::default() };
+    let set = SeamSet {
+        seams: seams
+            .into_iter()
+            .map(|v| Seam {
+                name: None,
+                vertices: v,
+            })
+            .collect(),
+    };
+    let opts = FlattenOptions {
+        ease: Ease::Uniform(S),
+        ..Default::default()
+    };
     flatten_garment(mesh, &set, &opts).expect("flatten")
 }
 
 /// Property check shared by every test mesh: positive flat areas, no flips.
 fn assert_no_flips(fp: &FlatPanel) {
-    assert!(fp.strain.flipped.is_empty(), "flipped triangles: {:?}", fp.strain.flipped);
+    assert!(
+        fp.strain.flipped.is_empty(),
+        "flipped triangles: {:?}",
+        fp.strain.flipped
+    );
     for t in &fp.panel.triangles {
         let u = t.map(|i| fp.uv[i as usize]);
         assert!((u[1] - u[0]).perp_dot(u[2] - u[0]) > 0.0);
@@ -33,7 +50,11 @@ fn flat_patch_stretches_uniformly_by_inverse_ease() {
         assert_relative_eq!(s.min, 1.0 / S, epsilon = 1e-9);
         assert_relative_eq!(s.max, 1.0 / S, epsilon = 1e-9);
     }
-    assert_relative_eq!(fp.strain.flat_area, S * S * fp.strain.body_area, max_relative = 1e-9);
+    assert_relative_eq!(
+        fp.strain.flat_area,
+        S * S * fp.strain.body_area,
+        max_relative = 1e-9
+    );
 }
 
 #[test]
@@ -130,7 +151,11 @@ fn spherical_cap_matches_axisymmetric_reference() {
     let h = alpha / reference.len() as f64;
     let mut worst = 0.0f64;
     for (t, tri) in fp.panel.triangles.iter().enumerate() {
-        let c: DVec3 = tri.iter().map(|&i| fp.panel.positions[i as usize]).sum::<DVec3>() / 3.0;
+        let c: DVec3 = tri
+            .iter()
+            .map(|&i| fp.panel.positions[i as usize])
+            .sum::<DVec3>()
+            / 3.0;
         let phi = (c.z / c.length()).acos();
         if phi < 3.0 * alpha / rings as f64 {
             continue; // slender triangles near the pole
@@ -139,15 +164,24 @@ fn spherical_cap_matches_axisymmetric_reference() {
         let (_, lr, lc) = reference[k];
         let (emin, emax) = (lr.min(lc), lr.max(lc));
         let s = fp.strain.triangles[t];
-        worst = worst.max(((s.min - emin) / emin).abs()).max(((s.max - emax) / emax).abs());
+        worst = worst
+            .max(((s.min - emin) / emin).abs())
+            .max(((s.max - emax) / emax).abs());
     }
-    assert!(worst < 0.015, "max relative deviation from reference stretch: {worst}");
+    assert!(
+        worst < 0.015,
+        "max relative deviation from reference stretch: {worst}"
+    );
 
     // On a sphere the circumference grows slower than on a plane, so the
     // rim is circumferentially slack relative to the centre and the overall
     // stretch straddles 1/s.
     assert!(fp.strain.min_stretch < 1.0 / S && fp.strain.max_stretch > 1.0 / S);
-    assert_relative_eq!(fp.strain.mean_area_stretch, 1.0 / (S * S), max_relative = 0.05);
+    assert_relative_eq!(
+        fp.strain.mean_area_stretch,
+        1.0 / (S * S),
+        max_relative = 0.05
+    );
 }
 
 #[test]
@@ -162,7 +196,9 @@ fn spherical_cap_is_rotationally_symmetric() {
         let tris = &fp.strain.triangles[start..start + 2 * segs as usize];
         for parity in 0..2 {
             let vals: Vec<f64> = tris.iter().skip(parity).step_by(2).map(|s| s.max).collect();
-            let (lo, hi) = vals.iter().fold((f64::INFINITY, 0.0f64), |(l, h), &v| (l.min(v), h.max(v)));
+            let (lo, hi) = vals
+                .iter()
+                .fold((f64::INFINITY, 0.0f64), |(l, h), &v| (l.min(v), h.max(v)));
             assert!((hi - lo) / lo < 1e-3, "band {band}: spread {lo}..{hi}");
         }
     }

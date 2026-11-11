@@ -58,11 +58,24 @@ pub fn lscm(panel: &Panel) -> Result<Vec<DVec2>> {
     for tri in &panel.triangles {
         let q = triangle_frame(tri.map(|i| panel.positions[i as usize]));
         let area = signed_area(q);
-        let g: [DVec2; 3] = std::array::from_fn(|j| (q[(j + 2) % 3] - q[(j + 1) % 3]).perp() / (2.0 * area));
+        let g: [DVec2; 3] =
+            std::array::from_fn(|j| (q[(j + 2) % 3] - q[(j + 1) % 3]).perp() / (2.0 * area));
         let idx = |j: usize| tri[j] as usize;
         let rows: [[(usize, f64); 6]; 2] = [
-            std::array::from_fn(|m| if m < 3 { (idx(m), g[m].x) } else { (n + idx(m - 3), -g[m - 3].y) }),
-            std::array::from_fn(|m| if m < 3 { (idx(m), g[m].y) } else { (n + idx(m - 3), g[m - 3].x) }),
+            std::array::from_fn(|m| {
+                if m < 3 {
+                    (idx(m), g[m].x)
+                } else {
+                    (n + idx(m - 3), -g[m - 3].y)
+                }
+            }),
+            std::array::from_fn(|m| {
+                if m < 3 {
+                    (idx(m), g[m].y)
+                } else {
+                    (n + idx(m - 3), g[m - 3].x)
+                }
+            }),
         ];
         for row in &rows {
             for &(i, a) in row {
@@ -108,7 +121,9 @@ mod tests {
     use approx::assert_relative_eq;
 
     fn single_panel(m: &crate::Mesh) -> Panel {
-        cut_panels(m, &SeamSet::default().resolve(m).unwrap()).unwrap().remove(0)
+        cut_panels(m, &SeamSet::default().resolve(m).unwrap())
+            .unwrap()
+            .remove(0)
     }
 
     #[test]
@@ -120,7 +135,11 @@ mod tests {
         for t in &p.triangles {
             for k in 0..3 {
                 let (a, b) = (t[k] as usize, t[(k + 1) % 3] as usize);
-                assert_relative_eq!(uv[a].distance(uv[b]), p.positions[a].distance(p.positions[b]), epsilon = 1e-8);
+                assert_relative_eq!(
+                    uv[a].distance(uv[b]),
+                    p.positions[a].distance(p.positions[b]),
+                    epsilon = 1e-8
+                );
             }
             let q = t.map(|i| uv[i as usize]);
             assert!(signed_area(q) > 0.0);

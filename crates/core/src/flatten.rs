@@ -23,7 +23,11 @@ pub struct FlattenOptions {
 
 impl Default for FlattenOptions {
     fn default() -> Self {
-        Self { ease: Ease::default(), arap: ArapOptions::default(), up: DVec3::Y }
+        Self {
+            ease: Ease::default(),
+            arap: ArapOptions::default(),
+            up: DVec3::Y,
+        }
     }
 }
 
@@ -40,12 +44,22 @@ pub struct FlatPanel {
 
 /// Flatten one panel with per-local-triangle ease values, oriented so that
 /// `up` points up the page.
-pub fn flatten_panel(panel: Panel, ease: &[f64], opts: &ArapOptions, up: DVec3) -> Result<FlatPanel> {
+pub fn flatten_panel(
+    panel: Panel,
+    ease: &[f64],
+    opts: &ArapOptions,
+    up: DVec3,
+) -> Result<FlatPanel> {
     let init = lscm(&panel)?;
     let mut r = arap(&panel, ease, &init, opts)?;
     orient(&panel, &mut r.uv, up);
     let strain = measure(&panel, &r.uv);
-    Ok(FlatPanel { panel, uv: r.uv, strain, arap_iterations: r.iterations })
+    Ok(FlatPanel {
+        panel,
+        uv: r.uv,
+        strain,
+        arap_iterations: r.iterations,
+    })
 }
 
 /// Rigidly place a flat layout (rotation + translation only, so strain is
@@ -90,7 +104,10 @@ pub fn orient(panel: &Panel, uv: &mut [DVec2], up: DVec3) {
     let score = |a: DVec2| {
         let ys: Vec<f64> = uv.iter().map(|&p| rotate(p, a).y).collect();
         let ym = ys.iter().sum::<f64>() / ys.len() as f64;
-        ys.iter().zip(&heights).map(|(y, h)| (y - ym) * (h - hm)).sum::<f64>()
+        ys.iter()
+            .zip(&heights)
+            .map(|(y, h)| (y - ym) * (h - hm))
+            .sum::<f64>()
     };
     let a = quarter
         .iter()
@@ -101,14 +118,20 @@ pub fn orient(panel: &Panel, uv: &mut [DVec2], up: DVec3) {
     for p in uv.iter_mut() {
         *p = rotate(*p, a);
     }
-    let lo = uv.iter().fold(DVec2::splat(f64::INFINITY), |l, p| l.min(*p));
+    let lo = uv
+        .iter()
+        .fold(DVec2::splat(f64::INFINITY), |l, p| l.min(*p));
     for p in uv.iter_mut() {
         *p -= lo;
     }
 }
 
 /// Cut `mesh` along `seams` and flatten every panel.
-pub fn flatten_garment(mesh: &Mesh, seams: &SeamSet, opts: &FlattenOptions) -> Result<Vec<FlatPanel>> {
+pub fn flatten_garment(
+    mesh: &Mesh,
+    seams: &SeamSet,
+    opts: &FlattenOptions,
+) -> Result<Vec<FlatPanel>> {
     let panels = cut_panels(mesh, &seams.resolve(mesh)?)?;
     panels
         .into_iter()
@@ -129,13 +152,27 @@ mod tests {
         // Tall grid lying in the XY plane, rotated 30° about Z so it starts tilted.
         let g = testmesh::grid(2, 6, 10.0);
         let rot = glam::DQuat::from_rotation_z(0.5);
-        let m = Mesh::new(g.positions().iter().map(|&p| rot * p).collect(), g.triangles().to_vec()).unwrap();
+        let m = Mesh::new(
+            g.positions().iter().map(|&p| rot * p).collect(),
+            g.triangles().to_vec(),
+        )
+        .unwrap();
         let fp = &flatten_garment(&m, &SeamSet::default(), &FlattenOptions::default()).unwrap()[0];
         let hi = fp.uv.iter().fold(DVec2::ZERO, |h, p| h.max(*p));
-        assert!((hi.x - 0.85 * 20.0).abs() < 1e-6 && (hi.y - 0.85 * 60.0).abs() < 1e-6, "{hi}");
+        assert!(
+            (hi.x - 0.85 * 20.0).abs() < 1e-6 && (hi.y - 0.85 * 60.0).abs() < 1e-6,
+            "{hi}"
+        );
         // The vertex highest on the body is at the top of the page.
-        let top = (0..m.positions().len()).max_by(|&a, &b| m.positions()[a].y.total_cmp(&m.positions()[b].y)).unwrap();
-        let local = fp.panel.vertex_origin.iter().position(|&o| o as usize == top).unwrap();
+        let top = (0..m.positions().len())
+            .max_by(|&a, &b| m.positions()[a].y.total_cmp(&m.positions()[b].y))
+            .unwrap();
+        let local = fp
+            .panel
+            .vertex_origin
+            .iter()
+            .position(|&o| o as usize == top)
+            .unwrap();
         assert!(fp.uv[local].y > 0.5 * hi.y);
     }
 }

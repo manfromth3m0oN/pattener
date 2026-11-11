@@ -10,8 +10,14 @@ pub enum Error {
     Obj { line: usize, msg: String },
 
     /// A triangle refers to a vertex that does not exist.
-    #[error("triangle {triangle} references vertex {vertex}, but the mesh has only {count} vertices")]
-    VertexOutOfRange { triangle: usize, vertex: u32, count: usize },
+    #[error(
+        "triangle {triangle} references vertex {vertex}, but the mesh has only {count} vertices"
+    )]
+    VertexOutOfRange {
+        triangle: usize,
+        vertex: u32,
+        count: usize,
+    },
 
     /// A triangle repeats a vertex or has (numerically) zero area.
     #[error("triangle {triangle} is degenerate (repeated vertex or zero area)")]
@@ -38,7 +44,11 @@ pub enum Error {
         "panel {panel} is not a topological disc (Euler characteristic {euler_characteristic}, \
          {boundary_loops} boundary loop(s)); add seams so that every panel can be laid flat"
     )]
-    NotADisc { panel: usize, euler_characteristic: i64, boundary_loops: usize },
+    NotADisc {
+        panel: usize,
+        euler_characteristic: i64,
+        boundary_loops: usize,
+    },
 
     /// A vertex has more than one outgoing boundary edge after cutting.
     #[error("panel {panel}: vertex {vertex} is non-manifold (pinched boundary)")]

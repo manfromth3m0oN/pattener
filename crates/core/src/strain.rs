@@ -60,14 +60,20 @@ pub fn principal_stretch(p: [DVec3; 3], u: [DVec2; 3]) -> PrincipalStretch {
     let q = DMat2::from_cols(u[1] - u[0], u[2] - u[0]);
     let det = q.determinant();
     if det.abs() < f64::MIN_POSITIVE {
-        return PrincipalStretch { min: f64::INFINITY, max: f64::INFINITY };
+        return PrincipalStretch {
+            min: f64::INFINITY,
+            max: f64::INFINITY,
+        };
     }
     let qi = q.inverse();
     // Columns of F = P Q⁻¹.
     let f0 = p1 * qi.x_axis.x + p2 * qi.x_axis.y;
     let f1 = p1 * qi.y_axis.x + p2 * qi.y_axis.y;
     let (l0, l1) = sym2_eigenvalues(f0.dot(f0), f0.dot(f1), f1.dot(f1));
-    PrincipalStretch { min: l0.max(0.0).sqrt(), max: l1.max(0.0).sqrt() }
+    PrincipalStretch {
+        min: l0.max(0.0).sqrt(),
+        max: l1.max(0.0).sqrt(),
+    }
 }
 
 /// Measure the strain of `uv` as a layout of `panel`.

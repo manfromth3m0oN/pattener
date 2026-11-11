@@ -18,7 +18,10 @@ pub struct SymBuilder {
 
 impl SymBuilder {
     pub fn new(n: usize) -> Self {
-        Self { n, entries: BTreeMap::new() }
+        Self {
+            n,
+            entries: BTreeMap::new(),
+        }
     }
 
     pub fn add(&mut self, i: usize, j: usize, v: f64) {
@@ -32,11 +35,16 @@ impl SymBuilder {
 
     /// Cholesky-factor the matrix (`LLᵀ`); it must be symmetric positive definite.
     pub fn factor(&self) -> Result<SpdSolver> {
-        let trips: Vec<Triplet<usize, usize, f64>> =
-            self.iter().filter(|&(i, j, _)| i >= j).map(|(i, j, v)| Triplet::new(i, j, v)).collect();
+        let trips: Vec<Triplet<usize, usize, f64>> = self
+            .iter()
+            .filter(|&(i, j, _)| i >= j)
+            .map(|(i, j, v)| Triplet::new(i, j, v))
+            .collect();
         let a = SparseColMat::<usize, f64>::try_new_from_triplets(self.n, self.n, &trips)
             .map_err(|e| Error::Solve(format!("{e:?}")))?;
-        let llt = a.sp_cholesky(Side::Lower).map_err(|e| Error::Solve(format!("Cholesky failed: {e:?}")))?;
+        let llt = a
+            .sp_cholesky(Side::Lower)
+            .map_err(|e| Error::Solve(format!("Cholesky failed: {e:?}")))?;
         Ok(SpdSolver { n: self.n, llt })
     }
 }
@@ -52,7 +60,9 @@ impl SpdSolver {
     pub fn solve(&self, rhs: &[Vec<f64>]) -> Result<Vec<Vec<f64>>> {
         let b = Mat::<f64>::from_fn(self.n, rhs.len(), |i, j| rhs[j][i]);
         let x = self.llt.solve(&b);
-        let out: Vec<Vec<f64>> = (0..rhs.len()).map(|j| (0..self.n).map(|i| x[(i, j)]).collect()).collect();
+        let out: Vec<Vec<f64>> = (0..rhs.len())
+            .map(|j| (0..self.n).map(|i| x[(i, j)]).collect())
+            .collect();
         if out.iter().flatten().all(|v| v.is_finite()) {
             Ok(out)
         } else {
@@ -68,7 +78,11 @@ pub fn triangle_frame(p: [DVec3; 3]) -> [DVec2; 3] {
     let e1 = p[1] - p[0];
     let e2 = p[2] - p[0];
     let l1 = e1.length();
-    [DVec2::ZERO, DVec2::new(l1, 0.0), DVec2::new(e1.dot(e2) / l1, e1.cross(e2).length() / l1)]
+    [
+        DVec2::ZERO,
+        DVec2::new(l1, 0.0),
+        DVec2::new(e1.dot(e2) / l1, e1.cross(e2).length() / l1),
+    ]
 }
 
 /// Signed area of a 2D triangle (positive if counter-clockwise).
@@ -127,10 +141,18 @@ mod tests {
 
     #[test]
     fn frame_is_isometric() {
-        let p = [DVec3::new(1., 2., 3.), DVec3::new(4., 0., 1.), DVec3::new(0., 5., -2.)];
+        let p = [
+            DVec3::new(1., 2., 3.),
+            DVec3::new(4., 0., 1.),
+            DVec3::new(0., 5., -2.),
+        ];
         let q = triangle_frame(p);
         for (i, j) in [(0, 1), (1, 2), (2, 0)] {
-            assert_relative_eq!((q[i] - q[j]).length(), (p[i] - p[j]).length(), epsilon = 1e-12);
+            assert_relative_eq!(
+                (q[i] - q[j]).length(),
+                (p[i] - p[j]).length(),
+                epsilon = 1e-12
+            );
         }
         assert!(signed_area(q) > 0.0);
     }

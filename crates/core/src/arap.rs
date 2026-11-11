@@ -15,7 +15,7 @@
 //! ## Local step
 //! With `u` fixed, each `R_T` maximises `tr(R_Tᵀ S_T)` for the covariance
 //! `S_T = Σ w_ij (u_i − u_j)(x_i − x_j)ᵀ`; this is the 2×2 SVD/polar
-//! rotation, see [`closest_rotation`](crate::linalg::closest_rotation).
+//! rotation, see [`closest_rotation`].
 //!
 //! ## Global step
 //! With `R` fixed, `∂E/∂u = 0` gives the sparse cotangent-Laplacian system
@@ -45,7 +45,10 @@ pub struct ArapOptions {
 
 impl Default for ArapOptions {
     fn default() -> Self {
-        Self { max_iterations: 500, tolerance: 1e-8 }
+        Self {
+            max_iterations: 500,
+            tolerance: 1e-8,
+        }
     }
 }
 
@@ -72,11 +75,22 @@ pub fn arap(panel: &Panel, ease: &[f64], init: &[DVec2], opts: &ArapOptions) -> 
         .zip(ease)
         .map(|(t, &s)| triangle_frame(t.map(|i| panel.positions[i as usize])).map(|q| q * s))
         .collect();
-    let w: Vec<[f64; 3]> = refs.iter().map(|q| std::array::from_fn(|k| cot_at(*q, k))).collect();
+    let w: Vec<[f64; 3]> = refs
+        .iter()
+        .map(|q| std::array::from_fn(|k| cot_at(*q, k)))
+        .collect();
 
     // Laplacian with vertex `pin` removed.
     let pin = 0usize;
-    let free = |i: usize| if i < pin { Some(i) } else if i > pin { Some(i - 1) } else { None };
+    let free = |i: usize| {
+        if i < pin {
+            Some(i)
+        } else if i > pin {
+            Some(i - 1)
+        } else {
+            None
+        }
+    };
     let mut lap = SymBuilder::new(n - 1);
     for (t, tri) in panel.triangles.iter().enumerate() {
         for k in 0..3 {
@@ -154,10 +168,20 @@ pub fn arap(panel: &Panel, ease: &[f64], init: &[DVec2], opts: &ArapOptions) -> 
         prev = energy;
     }
 
-    Ok(ArapResult { uv, iterations, energy })
+    Ok(ArapResult {
+        uv,
+        iterations,
+        energy,
+    })
 }
 
-fn arap_energy(panel: &Panel, refs: &[[DVec2; 3]], w: &[[f64; 3]], rot: &[(f64, f64)], uv: &[DVec2]) -> f64 {
+fn arap_energy(
+    panel: &Panel,
+    refs: &[[DVec2; 3]],
+    w: &[[f64; 3]],
+    rot: &[(f64, f64)],
+    uv: &[DVec2],
+) -> f64 {
     let mut e = 0.0;
     for (t, tri) in panel.triangles.iter().enumerate() {
         let (cs, sn) = rot[t];
@@ -181,15 +205,27 @@ mod tests {
     #[test]
     fn flat_grid_shrinks_by_ease() {
         let m = testmesh::grid(5, 4, 10.0);
-        let p = cut_panels(&m, &SeamSet::default().resolve(&m).unwrap()).unwrap().remove(0);
+        let p = cut_panels(&m, &SeamSet::default().resolve(&m).unwrap())
+            .unwrap()
+            .remove(0);
         let init = lscm(&p).unwrap();
         let s = 0.85;
-        let r = arap(&p, &vec![s; p.triangles.len()], &init, &ArapOptions::default()).unwrap();
+        let r = arap(
+            &p,
+            &vec![s; p.triangles.len()],
+            &init,
+            &ArapOptions::default(),
+        )
+        .unwrap();
         assert!(r.energy < 1e-16, "energy {}", r.energy);
         for t in &p.triangles {
             for k in 0..3 {
                 let (a, b) = (t[k] as usize, t[(k + 1) % 3] as usize);
-                assert_relative_eq!(r.uv[a].distance(r.uv[b]), s * p.positions[a].distance(p.positions[b]), epsilon = 1e-8);
+                assert_relative_eq!(
+                    r.uv[a].distance(r.uv[b]),
+                    s * p.positions[a].distance(p.positions[b]),
+                    epsilon = 1e-8
+                );
             }
         }
     }

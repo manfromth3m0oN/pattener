@@ -20,7 +20,13 @@ pub fn grid(nx: u32, ny: u32, cell: f64) -> Mesh {
     let mut t = Vec::new();
     for j in 0..ny {
         for i in 0..nx {
-            quad(&mut t, id(i, j), id(i + 1, j), id(i + 1, j + 1), id(i, j + 1));
+            quad(
+                &mut t,
+                id(i, j),
+                id(i + 1, j),
+                id(i + 1, j + 1),
+                id(i, j + 1),
+            );
         }
     }
     Mesh::new(p, t).expect("grid is valid")
@@ -48,7 +54,13 @@ pub fn cylinder(radius: f64, height: f64, n_around: u32, n_up: u32, sweep: f64) 
     let mut t = Vec::new();
     for j in 0..n_up {
         for i in 0..n_around {
-            quad(&mut t, id(i, j), id(i + 1, j), id(i + 1, j + 1), id(i, j + 1));
+            quad(
+                &mut t,
+                id(i, j),
+                id(i + 1, j),
+                id(i + 1, j + 1),
+                id(i, j + 1),
+            );
         }
     }
     Mesh::new(p, t).expect("cylinder is valid")
@@ -75,7 +87,13 @@ pub fn spherical_cap(radius: f64, alpha: f64, rings: u32, segments: u32) -> Mesh
     }
     for k in 1..rings {
         for i in 0..segments {
-            quad(&mut t, ring(k, i), ring(k + 1, i), ring(k + 1, i + 1), ring(k, i + 1));
+            quad(
+                &mut t,
+                ring(k, i),
+                ring(k + 1, i),
+                ring(k + 1, i + 1),
+                ring(k, i + 1),
+            );
         }
     }
     Mesh::new(p, t).expect("cap is valid")

@@ -45,7 +45,10 @@ impl Dsu {
 }
 
 fn corner_of(mesh: &Mesh, f: u32, v: u32) -> u32 {
-    let k = mesh.triangles()[f as usize].iter().position(|&x| x == v).expect("vertex in face");
+    let k = mesh.triangles()[f as usize]
+        .iter()
+        .position(|&x| x == v)
+        .expect("vertex in face");
     3 * f + k as u32
 }
 
@@ -55,7 +58,11 @@ fn corner_of(mesh: &Mesh, f: u32, v: u32) -> u32 {
 ///
 /// Fails with [`Error::NotADisc`] if any panel cannot be laid flat.
 pub fn cut_panels(mesh: &Mesh, edge_seams: &[Option<SeamId>]) -> Result<Vec<Panel>> {
-    assert_eq!(edge_seams.len(), mesh.edges().len(), "edge_seams must have one entry per edge");
+    assert_eq!(
+        edge_seams.len(),
+        mesh.edges().len(),
+        "edge_seams must have one entry per edge"
+    );
     let nf = mesh.triangles().len();
     let is_cut = |e: usize| edge_seams[e].is_some() || mesh.edges()[e].is_boundary();
 
@@ -123,7 +130,10 @@ fn build_panel(
             if is_cut(fe[k] as usize) {
                 let (a, b) = (triangles[lf][k], triangles[lf][(k + 1) % 3]);
                 if next.insert(a, (b, fe[k])).is_some() {
-                    return Err(Error::NonManifoldVertex { panel: panel_index, vertex: vertex_origin[a as usize] });
+                    return Err(Error::NonManifoldVertex {
+                        panel: panel_index,
+                        vertex: vertex_origin[a as usize],
+                    });
                 }
             }
         }
@@ -150,25 +160,43 @@ fn build_panel(
             visited.insert(cur, ());
             let Some(&(to, me)) = next.get(&cur) else {
                 // A boundary chain that does not close: treat as malformed.
-                return Err(Error::NonManifoldVertex { panel: panel_index, vertex: vertex_origin[cur as usize] });
+                return Err(Error::NonManifoldVertex {
+                    panel: panel_index,
+                    vertex: vertex_origin[cur as usize],
+                });
             };
-            lp.push(BoundaryEdge { from: cur, to, mesh_edge: me, seam: edge_seams[me as usize] });
+            lp.push(BoundaryEdge {
+                from: cur,
+                to,
+                mesh_edge: me,
+                seam: edge_seams[me as usize],
+            });
             cur = to;
             if cur == s {
                 break;
             }
             if visited.contains_key(&cur) {
-                return Err(Error::NonManifoldVertex { panel: panel_index, vertex: vertex_origin[cur as usize] });
+                return Err(Error::NonManifoldVertex {
+                    panel: panel_index,
+                    vertex: vertex_origin[cur as usize],
+                });
             }
         }
         loops.push(lp);
     }
 
     if chi != 1 || loops.len() != 1 {
-        return Err(Error::NotADisc { panel: panel_index, euler_characteristic: chi, boundary_loops: loops.len() });
+        return Err(Error::NotADisc {
+            panel: panel_index,
+            euler_characteristic: chi,
+            boundary_loops: loops.len(),
+        });
     }
 
-    let positions = vertex_origin.iter().map(|&o| mesh.positions()[o as usize]).collect();
+    let positions = vertex_origin
+        .iter()
+        .map(|&o| mesh.positions()[o as usize])
+        .collect();
     Ok(Panel {
         positions,
         triangles,
@@ -185,7 +213,15 @@ mod tests {
     use crate::{Seam, SeamSet};
 
     fn cut(mesh: &Mesh, seams: Vec<Vec<u32>>) -> Result<Vec<Panel>> {
-        let set = SeamSet { seams: seams.into_iter().map(|v| Seam { name: None, vertices: v }).collect() };
+        let set = SeamSet {
+            seams: seams
+                .into_iter()
+                .map(|v| Seam {
+                    name: None,
+                    vertices: v,
+                })
+                .collect(),
+        };
         cut_panels(mesh, &set.resolve(mesh)?)
     }
 
@@ -205,7 +241,10 @@ mod tests {
         let p = cut(&m, vec![vec![2, 7, 12]]).unwrap();
         assert_eq!(p.len(), 2);
         assert_eq!(p.iter().map(|p| p.vertex_count()).sum::<usize>(), 15 + 3);
-        let seam_edges: usize = p.iter().map(|p| p.boundary.iter().filter(|e| e.seam == Some(0)).count()).sum();
+        let seam_edges: usize = p
+            .iter()
+            .map(|p| p.boundary.iter().filter(|e| e.seam == Some(0)).count())
+            .sum();
         assert_eq!(seam_edges, 4);
     }
 
@@ -223,7 +262,14 @@ mod tests {
     fn uncut_cylinder_is_not_a_disc() {
         let m = testmesh::cylinder(50.0, 100.0, 12, 4, std::f64::consts::TAU);
         let err = cut(&m, vec![]).unwrap_err();
-        assert_eq!(err, Error::NotADisc { panel: 0, euler_characteristic: 0, boundary_loops: 2 });
+        assert_eq!(
+            err,
+            Error::NotADisc {
+                panel: 0,
+                euler_characteristic: 0,
+                boundary_loops: 2
+            }
+        );
     }
 
     #[test]

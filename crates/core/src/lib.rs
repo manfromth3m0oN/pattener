@@ -22,6 +22,9 @@
 //! This crate does no file I/O and spawns no threads, so it can be
 //! compiled to WebAssembly.
 
+// Index loops mirror the formulas; `!(a > b)` deliberately rejects NaN.
+#![allow(clippy::needless_range_loop, clippy::neg_cmp_op_on_partial_ord)]
+
 pub mod arap;
 pub mod cut;
 pub mod ease;
@@ -37,9 +40,10 @@ pub mod strain;
 pub mod svg;
 pub mod testmesh;
 
-pub use error::{Error, Result};
 pub use ease::Ease;
+pub use error::{Error, Result};
 pub use flatten::{flatten_garment, flatten_panel, FlatPanel, FlattenOptions};
+pub use glam;
 pub use mesh::Mesh;
 pub use panel::{BoundaryEdge, Panel};
 pub use seams::{Seam, SeamId, SeamSet};

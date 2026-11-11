@@ -78,14 +78,22 @@ impl Mesh {
         for (t, tri) in triangles.iter().enumerate() {
             for &v in tri {
                 if v as usize >= n {
-                    return Err(Error::VertexOutOfRange { triangle: t, vertex: v, count: n });
+                    return Err(Error::VertexOutOfRange {
+                        triangle: t,
+                        vertex: v,
+                        count: n,
+                    });
                 }
             }
             let [a, b, c] = *tri;
             if a == b || b == c || a == c {
                 return Err(Error::DegenerateTriangle { triangle: t });
             }
-            let (pa, pb, pc) = (positions[a as usize], positions[b as usize], positions[c as usize]);
+            let (pa, pb, pc) = (
+                positions[a as usize],
+                positions[b as usize],
+                positions[c as usize],
+            );
             let area2 = (pb - pa).cross(pc - pa).length();
             let scale = (pb - pa).length_squared().max((pc - pa).length_squared());
             if !(area2 > 1e-12 * scale) {
@@ -96,15 +104,25 @@ impl Mesh {
             for k in 0..3 {
                 let (u, v) = (tri[k], tri[(k + 1) % 3]);
                 if directed.insert([u, v], ()).is_some() {
-                    return Err(Error::InconsistentOrientation { a: u.min(v), b: u.max(v) });
+                    return Err(Error::InconsistentOrientation {
+                        a: u.min(v),
+                        b: u.max(v),
+                    });
                 }
                 let id = *edge_lookup.entry(key(u, v)).or_insert_with(|| {
-                    edges.push(Edge { v: key(u, v), faces: [t as u32, u32::MAX], face_count: 0 });
+                    edges.push(Edge {
+                        v: key(u, v),
+                        faces: [t as u32, u32::MAX],
+                        face_count: 0,
+                    });
                     (edges.len() - 1) as EdgeId
                 });
                 let e = &mut edges[id as usize];
                 if e.face_count == 2 {
-                    return Err(Error::NonManifoldEdge { a: e.v[0], b: e.v[1] });
+                    return Err(Error::NonManifoldEdge {
+                        a: e.v[0],
+                        b: e.v[1],
+                    });
                 }
                 e.faces[e.face_count as usize] = t as u32;
                 e.face_count += 1;
@@ -113,7 +131,13 @@ impl Mesh {
             face_edges.push(fe);
         }
 
-        Ok(Self { positions, triangles, edges, edge_lookup, face_edges })
+        Ok(Self {
+            positions,
+            triangles,
+            edges,
+            edge_lookup,
+            face_edges,
+        })
     }
 
     /// Vertex positions (millimetres, by convention).
@@ -177,16 +201,25 @@ mod tests {
     fn rejects_flipped_neighbour() {
         let (p, _) = quad();
         let err = Mesh::new(p, vec![[0, 1, 2], [0, 3, 2], [2, 3, 0]]).unwrap_err();
-        assert!(matches!(err, Error::InconsistentOrientation { .. } | Error::NonManifoldEdge { .. }));
+        assert!(matches!(
+            err,
+            Error::InconsistentOrientation { .. } | Error::NonManifoldEdge { .. }
+        ));
         let (p, _) = quad();
         let err = Mesh::new(p, vec![[0, 1, 2], [2, 0, 3]]).unwrap_err();
-        assert!(matches!(err, Error::InconsistentOrientation { .. }), "{err:?}");
+        assert!(
+            matches!(err, Error::InconsistentOrientation { .. }),
+            "{err:?}"
+        );
     }
 
     #[test]
     fn rejects_degenerate() {
         let (mut p, t) = quad();
         p[2] = p[1];
-        assert!(matches!(Mesh::new(p, t), Err(Error::DegenerateTriangle { .. })));
+        assert!(matches!(
+            Mesh::new(p, t),
+            Err(Error::DegenerateTriangle { .. })
+        ));
     }
 }

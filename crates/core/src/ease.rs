@@ -37,13 +37,18 @@ impl Ease {
                 .iter()
                 .map(|&f| {
                     v.get(f as usize).copied().ok_or_else(|| {
-                        Error::InvalidEase(format!("no value for mesh triangle {f} ({} given)", v.len()))
+                        Error::InvalidEase(format!(
+                            "no value for mesh triangle {f} ({} given)",
+                            v.len()
+                        ))
                     })
                 })
                 .collect::<Result<_>>()?,
         };
         if let Some(bad) = values.iter().find(|s| !(s.is_finite() && **s > 0.0)) {
-            return Err(Error::InvalidEase(format!("ease must be positive and finite, got {bad}")));
+            return Err(Error::InvalidEase(format!(
+                "ease must be positive and finite, got {bad}"
+            )));
         }
         Ok(values)
     }

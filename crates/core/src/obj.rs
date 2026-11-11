@@ -25,8 +25,12 @@ pub fn parse_obj(text: &str) -> Result<Mesh> {
             Some("v") => {
                 let mut c = [0.0; 3];
                 for slot in &mut c {
-                    let tok = it.next().ok_or_else(|| err(line, "vertex needs 3 coordinates"))?;
-                    *slot = tok.parse().map_err(|_| err(line, &format!("bad number '{tok}'")))?;
+                    let tok = it
+                        .next()
+                        .ok_or_else(|| err(line, "vertex needs 3 coordinates"))?;
+                    *slot = tok
+                        .parse()
+                        .map_err(|_| err(line, &format!("bad number '{tok}'")))?;
                 }
                 positions.push(DVec3::from_array(c));
             }
@@ -34,7 +38,9 @@ pub fn parse_obj(text: &str) -> Result<Mesh> {
                 let mut idx = Vec::with_capacity(4);
                 for tok in it {
                     let first = tok.split('/').next().unwrap_or("");
-                    let i: i64 = first.parse().map_err(|_| err(line, &format!("bad index '{tok}'")))?;
+                    let i: i64 = first
+                        .parse()
+                        .map_err(|_| err(line, &format!("bad index '{tok}'")))?;
                     let resolved = if i > 0 {
                         i - 1
                     } else if i < 0 {
@@ -74,7 +80,10 @@ pub fn write_obj(mesh: &Mesh) -> String {
 }
 
 fn err(line: usize, msg: &str) -> Error {
-    Error::Obj { line, msg: msg.to_string() }
+    Error::Obj {
+        line,
+        msg: msg.to_string(),
+    }
 }
 
 #[cfg(test)]
@@ -100,6 +109,9 @@ mod tests {
 
     #[test]
     fn reports_line() {
-        assert_eq!(parse_obj("v 0 0\n").unwrap_err(), err(1, "vertex needs 3 coordinates"));
+        assert_eq!(
+            parse_obj("v 0 0\n").unwrap_err(),
+            err(1, "vertex needs 3 coordinates")
+        );
     }
 }
