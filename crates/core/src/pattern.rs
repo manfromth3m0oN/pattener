@@ -34,6 +34,7 @@ use std::collections::HashMap;
 /// Options for [`build_pattern`].
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(default))]
 pub struct PatternOptions {
     /// Glue overlap on seams (mm).
     pub seam_allowance: f64,

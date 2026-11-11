@@ -84,6 +84,7 @@ pub enum SeamStyle {
 /// Mesh resolution and seam layout.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(default))]
 pub struct BodyOptions {
     /// Vertices around each ring (a multiple of 4, at least 16).
     pub around: u32,

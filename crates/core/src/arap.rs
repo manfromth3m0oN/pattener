@@ -37,6 +37,7 @@ use glam::DVec2;
 /// ARAP iteration controls.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(default))]
 pub struct ArapOptions {
     pub max_iterations: usize,
     /// Relative energy decrease below which iteration stops.
