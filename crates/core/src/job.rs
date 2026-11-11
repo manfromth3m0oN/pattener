@@ -83,6 +83,14 @@ pub struct JobOptions {
     pub edges: Vec<EdgeSpec>,
     /// Also produce a tiled print-at-home PDF.
     pub print: Option<PrintOptions>,
+    /// Outline smoothing scale `σ` (mm; see [`crate::outline`]); 0 keeps
+    /// outlines as flattened.
+    pub outline_smoothing_mm: f64,
+    /// Mirror image of each mesh vertex for a symmetric garment (from
+    /// [`garment::build`](crate::garment::build)): mirror-image pieces
+    /// come out as exact mirror images.
+    #[cfg_attr(feature = "serde", serde(skip))]
+    pub mirror: Option<Vec<u32>>,
 }
 
 impl Default for JobOptions {
@@ -104,6 +112,8 @@ impl Default for JobOptions {
             materials: None,
             edges: Vec::new(),
             print: None,
+            outline_smoothing_mm: crate::flatten::DEFAULT_OUTLINE_SMOOTHING_MM,
+            mirror: None,
         }
     }
 }
@@ -114,6 +124,10 @@ impl Default for JobOptions {
 pub struct PanelReport {
     pub index: usize,
     pub file: String,
+    /// For a symmetric garment: the piece this one is the mirror image of
+    /// (its own index for a piece that is symmetric itself).
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+    pub mirror_of: Option<usize>,
     pub sheet: Option<String>,
     pub ease: f64,
     pub seams: Vec<String>,
@@ -321,6 +335,8 @@ pub fn run(mesh: &Mesh, seams: &SeamSet, opts: &JobOptions) -> Result<JobOutput>
         panel_stiffness: stiffness,
         length_relief: opts.length_relief,
         along: opts.along.clone(),
+        outline_smoothing_mm: opts.outline_smoothing_mm,
+        mirror: opts.mirror.clone(),
     };
     let garment = flatten_garment(mesh, seams, &fopts)?;
     let fit = pressure_map(mesh, &garment, &pressure_k);
@@ -340,11 +356,16 @@ pub fn run(mesh: &Mesh, seams: &SeamSet, opts: &JobOptions) -> Result<JobOutput>
     let mut titles = Vec::new();
     for (i, fp) in garment.panels.iter().enumerate() {
         let names = seam_names(fp, seams);
-        let label = if names.is_empty() {
+        let mut label = if names.is_empty() {
             format!("panel {i}")
         } else {
             format!("panel {i} — {}", names.join(", "))
         };
+        match garment.mirrored[i] {
+            Some(j) if j == i => label.push_str(" (symmetric)"),
+            Some(j) => label.push_str(&format!(" (mirror image of panel {j})")),
+            None => {}
+        }
         panel_svgs.push(panel_svg(
             fp,
             &pieces[i],
@@ -387,6 +408,7 @@ pub fn run(mesh: &Mesh, seams: &SeamSet, opts: &JobOptions) -> Result<JobOutput>
         report.panels.push(PanelReport {
             index: i,
             file: format!("panel_{i:02}.svg"),
+            mirror_of: garment.mirrored[i],
             sheet: panel_sheets[i].1.clone(),
             ease: panel_sheets[i].0,
             seams: names,

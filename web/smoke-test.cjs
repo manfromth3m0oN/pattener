@@ -60,6 +60,11 @@ const done = (p) => p.waitForFunction(
   await page.waitForFunction(() => design.curves.some((c) => c.name === 'bottom'));
   await garmentReady();
   assert.match(await page.textContent('#g-status'), /4 flat pieces/);
+  // Built each side as drawn, it still makes four pieces.
+  await page.check('#g-asym');
+  await page.waitForFunction(() => design.asymmetric === true);
+  await garmentReady();
+  assert.match(await page.textContent('#g-status'), /4 flat pieces/);
   await page.selectOption('#g-template', 'top');
   await page.click('#g-example');
   await page.waitForFunction(() => /2 flat pieces/.test(document.getElementById('g-status').textContent), null, { timeout: 60000 });
@@ -129,6 +134,8 @@ const done = (p) => p.waitForFunction(
   assert.match(await page.textContent('#status'), /Done .*2 panels/);
   assert.ok(await page.isVisible('#pressure-panel'));
   assert.match(await page.locator('#panel-table').innerText(), /mmHg/);
+  // The top is built symmetric: both pieces are symmetric about the centre.
+  assert.equal((await page.locator('#panel-table').innerText()).match(/\(symmetric\)/g).length, 2);
   // One layout per sheet, with a materials list.
   assert.equal(await page.locator('#materials-out img').count(), 2);
   assert.match(await page.locator('#materials-out table').innerText(), /red 0\.40/);

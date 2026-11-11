@@ -148,6 +148,12 @@ pub struct GarmentDesign {
     /// Pieces cut from other sheets, chosen by a point on them. Points,
     /// not panel numbers, so assignments survive changes to the seams.
     pub sheet_assignments: Vec<SheetAssignment>,
+    /// Build each side as drawn. By default a design is symmetric: it is
+    /// built on the right half of the body (`x > 0`; curves drawn on the
+    /// left are mirrored over, loops are cut at the centre line) and
+    /// mirrored, so the two sides match exactly.
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "std::ops::Not::not"))]
+    pub asymmetric: bool,
 }
 
 /// Per panel of a built garment (in cut order), its triangles as indices
@@ -283,6 +289,9 @@ pub struct BuiltGarment {
     pub edges: Vec<EdgeSpec>,
     /// For each vertex of `mesh`, its vertex in `body`.
     pub vertex_origin: Vec<u32>,
+    /// For a symmetric build, each vertex of `mesh`'s mirror image across
+    /// `x = 0` (itself on the centre line).
+    pub mirror: Option<Vec<u32>>,
     pub warnings: Vec<String>,
 }
 
@@ -301,7 +310,7 @@ pub fn build(body: &Mesh, design: &GarmentDesign) -> Result<BuiltGarment> {
     let (pos0, tri0) = (body.positions(), body.triangles());
     let mut warnings = Vec::new();
 
-    // 1. Curves with mirrors, edges before seams.
+    // 1. Check the curves.
     let mut curves: Vec<Curve> = Vec::new();
     for c in &design.curves {
         if c.points.len() < 2 {
@@ -316,93 +325,26 @@ pub fn build(body: &Mesh, design: &GarmentDesign) -> Result<BuiltGarment> {
             )));
         }
         curves.push(c.clone());
-        if c.mirror {
-            let points = c
-                .points
-                .iter()
-                .map(|&p| mirror_point(pos0, tri0, p).expect("checked"))
-                .collect();
-            curves.push(Curve {
-                name: format!("{} (mirror)", c.name),
-                points,
-                mirror: false,
-                ..c.clone()
-            });
-        }
-    }
-    curves.sort_by_key(|c| c.kind == CurveKind::Seam);
-
-    // 2. Embed.
-    let mut m = EditMesh::new(pos0.to_vec(), tri0.to_vec());
-    let mut paths: Vec<CurvePath> = Vec::new();
-    for c in &curves {
-        let control: Vec<DVec3> = c
-            .points
-            .iter()
-            .map(|sp| sp.position(pos0, tri0).expect("checked"))
-            .collect();
-        let samples = smooth(&control, c.closed, SAMPLE_MM);
-        let n = samples.len();
-        let mut verts = Vec::with_capacity(n);
-        for (k, &p) in samples.iter().enumerate() {
-            let end = !c.closed && (k == 0 || k == n - 1);
-            let snapped = if end && c.kind == CurveKind::Seam {
-                nearest_curve_vertex(&m, &paths, p, SNAP_MM)
-            } else {
-                None
-            };
-            let v = match snapped {
-                Some(v) => v,
-                None => {
-                    let here = locate(&m.positions, &m.triangles, p);
-                    m.insert_point(here, POINT_SNAP)
-                }
-            };
-            if verts.last() != Some(&v) {
-                verts.push(v);
-            }
-        }
-        if c.closed && verts.len() > 1 && verts.first() == verts.last() {
-            verts.pop();
-        }
-        let mut path = vec![verts[0]];
-        let segments = if c.closed {
-            verts.len()
-        } else {
-            verts.len() - 1
-        };
-        for s in 0..segments {
-            let (a, b) = (verts[s], verts[(s + 1) % verts.len()]);
-            if a == b {
-                continue;
-            }
-            let start = path.len();
-            if walk(&mut m, &mut paths, &mut path, a, b).is_err() {
-                // The plane through the two points does not join them on
-                // the surface (e.g. through the armpit): fall back to the
-                // shortest route along mesh edges.
-                path.truncate(start);
-                shortest_edge_path(&m, a, b, &mut path).ok_or_else(|| {
-                    Error::Garment(format!("curve '{}' crosses a gap in the body", c.name))
-                })?;
-            }
-        }
-        if c.closed && path.len() > 1 && path.first() == path.last() {
-            path.pop();
-        }
-        paths.push(CurvePath {
-            name: c.name.clone(),
-            kind: c.kind,
-            closed: c.closed,
-            vertices: path,
-            seam_finish: c.seam_finish,
-            edge_finish: c.edge_finish,
-        });
     }
 
-    cleanup(&mut m, &mut paths);
-    let body_mesh = Mesh::new(m.positions.clone(), m.live_triangles())
-        .map_err(|e| Error::Garment(format!("cutting the curves into the body failed: {e}")))?;
+    // 2. Embed: on one half and mirrored (exactly symmetric), or each
+    // curve and its mirror separately.
+    let symmetric = if design.asymmetric {
+        None
+    } else {
+        body_mirror(body)
+    };
+    let (cut, paths, mirror) = match symmetric {
+        Some(body_mirror) => embed_symmetric(body, &body_mirror, &curves)?,
+        None => {
+            let (m, paths) = embed_both_sides(body, &curves)?;
+            let cut = Mesh::new(m.positions.clone(), m.live_triangles()).map_err(|e| {
+                Error::Garment(format!("cutting the curves into the body failed: {e}"))
+            })?;
+            (cut, paths, None)
+        }
+    };
+    let body_mesh = cut;
 
     // 3. Region.
     let mut blocked: HashSet<(u32, u32)> = HashSet::new();
@@ -416,6 +358,7 @@ pub fn build(body: &Mesh, design: &GarmentDesign) -> Result<BuiltGarment> {
     let mut seams = SeamSet::default();
     let mut edges: Vec<EdgeSpec> = Vec::new();
     let mut vertex_origin = Vec::new();
+    let mut garment_mirror = None;
     if let Some(inside) = design.inside {
         let p = inside
             .position(pos0, tri0)
@@ -462,6 +405,21 @@ pub fn build(body: &Mesh, design: &GarmentDesign) -> Result<BuiltGarment> {
             }
         }
         let gm = Mesh::new(positions, triangles)?;
+        // Mirror images within the garment, if its area is symmetric too.
+        if let Some(body_mirror) = &mirror {
+            let m: Option<Vec<u32>> = vertex_origin
+                .iter()
+                .map(|&v| local.get(&body_mirror[v as usize]).copied())
+                .collect();
+            if m.is_none() {
+                warnings.push(
+                    "the garment's area is not the same on both sides, so its pieces are not \
+                     mirrored"
+                        .into(),
+                );
+            }
+            garment_mirror = m;
+        }
         // Runs of a curve along edges of the garment mesh, in its indices.
         let runs_of = |p: &CurvePath| {
             let mut runs: Vec<Vec<u32>> = Vec::new();
@@ -539,8 +497,509 @@ pub fn build(body: &Mesh, design: &GarmentDesign) -> Result<BuiltGarment> {
         seams,
         edges,
         vertex_origin,
+        mirror: garment_mirror,
         warnings,
     })
+}
+
+/// The mirror image of each vertex across `x = 0`, if the body is exactly
+/// symmetric (as the body model is) with no triangle crossing the
+/// midplane.
+pub fn body_mirror(body: &Mesh) -> Option<Vec<u32>> {
+    let p = body.positions();
+    let key = |q: DVec3| {
+        (
+            (q.x * 1000.0).round() as i64,
+            (q.y * 1000.0).round() as i64,
+            (q.z * 1000.0).round() as i64,
+        )
+    };
+    let index: HashMap<_, u32> = p
+        .iter()
+        .enumerate()
+        .map(|(i, &q)| (key(q), i as u32))
+        .collect();
+    let mirror: Option<Vec<u32>> = p
+        .iter()
+        .map(|&q| index.get(&key(DVec3::new(-q.x, q.y, q.z))).copied())
+        .collect();
+    let crossing = body.triangles().iter().any(|t| {
+        let x = t.map(|i| p[i as usize].x);
+        x.iter().any(|&v| v > MID_EPS) && x.iter().any(|&v| v < -MID_EPS)
+    });
+    if crossing {
+        None
+    } else {
+        mirror
+    }
+}
+
+/// Vertices closer than this (mm) to `x = 0` are on the body's midline.
+const MID_EPS: f64 = 1e-6;
+/// A curve whose points all lie this close (mm) to `x = 0` runs along the
+/// centre line.
+const CENTRE_MM: f64 = 15.0;
+
+/// Nearest point to `p` on the midline edges `mid` of `m`: (edge, t).
+fn nearest_on_midline(m: &EditMesh, mid: &[(u32, u32)], p: DVec3) -> Option<((u32, u32), f64)> {
+    mid.iter()
+        .map(|&(a, b)| {
+            let (pa, pb) = (m.positions[a as usize], m.positions[b as usize]);
+            let d = pb - pa;
+            let t = ((p - pa).dot(d) / d.length_squared().max(1e-12)).clamp(0.0, 1.0);
+            ((a, b), t, p.distance(pa + t * d))
+        })
+        .min_by(|x, y| x.2.total_cmp(&y.2))
+        .map(|(e, t, _)| (e, t))
+}
+
+/// Make the point of the midline nearest `p` a vertex.
+fn midline_vertex(m: &mut EditMesh, p: DVec3) -> Option<u32> {
+    let mid = midline_edges(m);
+    let ((a, b), t) = nearest_on_midline(m, &mid, p)?;
+    let len = m.positions[a as usize].distance(m.positions[b as usize]);
+    Some(if t * len < 2.0 {
+        a
+    } else if (1.0 - t) * len < 2.0 {
+        b
+    } else {
+        m.split_edge(a, b, t)
+    })
+}
+
+/// Live edges with both ends on the midplane.
+fn midline_edges(m: &EditMesh) -> Vec<(u32, u32)> {
+    let mut e = HashSet::new();
+    for t in m.triangles.iter().filter(|t| t[0] != u32::MAX) {
+        for k in 0..3 {
+            let (a, b) = (t[k], t[(k + 1) % 3]);
+            if m.positions[a as usize].x == 0.0 && m.positions[b as usize].x == 0.0 {
+                e.insert((a.min(b), a.max(b)));
+            }
+        }
+    }
+    let mut e: Vec<_> = e.into_iter().collect();
+    e.sort_unstable();
+    e
+}
+
+/// How a design curve is cut on the right half.
+enum HalfCurve {
+    /// Along the centre line between two midline vertices; `guide` picks
+    /// which way round.
+    Centre { guide: DVec3 },
+    /// Pieces of the curve on the right half.
+    Runs(Vec<(Vec<DVec3>, bool)>),
+}
+
+/// Pieces of a sampled curve with `x ≥ 0`; ends where it crosses the
+/// midplane are moved onto the midline. A closed curve that stays on the
+/// right is one closed run.
+fn clip_right(m: &EditMesh, samples: &[DVec3], closed: bool) -> Vec<(Vec<DVec3>, bool)> {
+    let n = samples.len();
+    if samples.iter().all(|p| p.x >= 0.0) {
+        return vec![(samples.to_vec(), closed)];
+    }
+    let mid = midline_edges(m);
+    let on_mid = |p: DVec3| {
+        nearest_on_midline(m, &mid, p)
+            .map(|((a, b), t)| m.positions[a as usize].lerp(m.positions[b as usize], t))
+            .unwrap_or(p)
+    };
+    let segs = if closed { n } else { n - 1 };
+    // Start a closed curve at a left sample so that runs do not wrap.
+    let start = if closed {
+        samples.iter().position(|p| p.x < 0.0).unwrap_or(0)
+    } else {
+        0
+    };
+    let at = |i: usize| samples[(start + i) % n];
+    let mut runs = Vec::new();
+    let mut cur: Vec<DVec3> = Vec::new();
+    if at(0).x >= 0.0 {
+        cur.push(at(0));
+    }
+    for i in 0..segs {
+        let (a, b) = (at(i), at(i + 1));
+        match (a.x >= 0.0, b.x >= 0.0) {
+            (true, true) => cur.push(b),
+            (true, false) => {
+                let t = a.x / (a.x - b.x);
+                cur.push(on_mid(a.lerp(b, t)));
+                runs.push((std::mem::take(&mut cur), false));
+            }
+            (false, true) => {
+                let t = a.x / (a.x - b.x);
+                cur = vec![on_mid(a.lerp(b, t)), b];
+            }
+            (false, false) => {}
+        }
+    }
+    if cur.len() > 1 {
+        runs.push((cur, false));
+    }
+    runs.retain(|(r, _)| r.len() > 1);
+    runs
+}
+
+/// Embed the design on the right half of an exactly symmetric body and
+/// mirror it: the cut body, the curves, and each vertex's mirror image.
+fn embed_symmetric(
+    body: &Mesh,
+    body_mirror: &[u32],
+    curves: &[Curve],
+) -> Result<(Mesh, Vec<CurvePath>, Option<Vec<u32>>)> {
+    let (pos0, tri0) = (body.positions(), body.triangles());
+    let mut positions = pos0.to_vec();
+    for (i, p) in positions.iter_mut().enumerate() {
+        if body_mirror[i] as usize == i || p.x.abs() < MID_EPS {
+            p.x = 0.0;
+        }
+    }
+    let mut m = EditMesh::new(positions, tri0.to_vec());
+    m.keep_midline = true;
+
+    // Each curve as centre-line ends or right-half runs; centre curves
+    // first (so other seams can end on them), then edges, then seams.
+    let mut order: Vec<&Curve> = curves.iter().collect();
+    let centre = |c: &Curve| {
+        !c.mirror
+            && c.points.iter().all(|sp| {
+                sp.position(pos0, tri0)
+                    .is_some_and(|p| p.x.abs() < CENTRE_MM)
+            })
+    };
+    order.sort_by_key(|c| (!centre(c), c.kind == CurveKind::Seam));
+    let mut plan: Vec<(&Curve, HalfCurve)> = Vec::new();
+    let mut paths: Vec<CurvePath> = Vec::new();
+    for c in order {
+        let control: Vec<DVec3> = c
+            .points
+            .iter()
+            .map(|sp| sp.position(pos0, tri0).expect("checked"))
+            .collect();
+        if centre(c) {
+            let flat = |p: DVec3| DVec3::new(0.0, p.y, p.z);
+            let a = midline_vertex(&mut m, flat(control[0]));
+            let b = midline_vertex(&mut m, flat(control[control.len() - 1]));
+            let (Some(a), Some(b)) = (a, b) else {
+                return Err(Error::Garment("the body has no centre line".into()));
+            };
+            let guide = flat(control[control.len() / 2]);
+            // Placeholder, so later seams can end on these vertices.
+            paths.push(CurvePath {
+                name: c.name.clone(),
+                kind: c.kind,
+                closed: false,
+                vertices: vec![a, b],
+                seam_finish: c.seam_finish,
+                edge_finish: c.edge_finish,
+            });
+            plan.push((c, HalfCurve::Centre { guide }));
+            continue;
+        }
+        // Draw on the right: mirror curves drawn mostly on the left.
+        let mean_x = control.iter().map(|p| p.x).sum::<f64>() / control.len() as f64;
+        let control: Vec<DVec3> = if mean_x < 0.0 {
+            control.iter().map(|p| DVec3::new(-p.x, p.y, p.z)).collect()
+        } else {
+            control
+        };
+        let samples = smooth(&control, c.closed, SAMPLE_MM);
+        let runs = clip_right(&m, &samples, c.closed);
+        for (run, closed) in &runs {
+            let path = embed_samples(&mut m, &mut paths, c, *closed, run)?;
+            paths.push(CurvePath {
+                name: c.name.clone(),
+                kind: c.kind,
+                closed: *closed,
+                vertices: path,
+                seam_finish: c.seam_finish,
+                edge_finish: c.edge_finish,
+            });
+        }
+        plan.push((c, HalfCurve::Runs(runs)));
+    }
+    cleanup(&mut m, &mut paths);
+
+    // Mirror the right half.
+    let live = m.live_triangles();
+    let p = &m.positions;
+    if live.iter().any(|t| {
+        let x = t.map(|i| p[i as usize].x);
+        x.iter().any(|&v| v > 0.0) && x.iter().any(|&v| v < 0.0)
+    }) {
+        return Err(Error::Garment(
+            "a curve crosses the centre line of the body; end it on the centre line or tick \
+             'Asymmetric design'"
+                .into(),
+        ));
+    }
+    let right: Vec<[u32; 3]> = live
+        .into_iter()
+        .filter(|t| {
+            t.iter().all(|&i| p[i as usize].x >= 0.0) && t.iter().any(|&i| p[i as usize].x > 0.0)
+        })
+        .collect();
+    let mut new_index = vec![u32::MAX; p.len()];
+    let mut positions: Vec<DVec3> = Vec::new();
+    for t in &right {
+        for &v in t {
+            if new_index[v as usize] == u32::MAX {
+                new_index[v as usize] = positions.len() as u32;
+                positions.push(p[v as usize]);
+            }
+        }
+    }
+    let half = positions.len();
+    let mut mirror: Vec<u32> = (0..half as u32).collect();
+    for i in 0..half {
+        if positions[i].x > 0.0 {
+            mirror[i] = positions.len() as u32;
+            mirror.push(i as u32);
+            let q = positions[i];
+            positions.push(DVec3::new(-q.x, q.y, q.z));
+        }
+    }
+    let mut triangles: Vec<[u32; 3]> = right
+        .iter()
+        .map(|t| t.map(|v| new_index[v as usize]))
+        .collect();
+    let mirrored: Vec<[u32; 3]> = triangles
+        .iter()
+        .map(|t| {
+            [
+                mirror[t[0] as usize],
+                mirror[t[2] as usize],
+                mirror[t[1] as usize],
+            ]
+        })
+        .collect();
+    triangles.extend(mirrored);
+    let cut = Mesh::new(positions, triangles)
+        .map_err(|e| Error::Garment(format!("mirroring the cut body failed: {e}")))?;
+
+    // Curves on the full body: the right-half pieces joined to their
+    // mirror images; centre curves along the midline.
+    let mid_adj = {
+        let mut adj: HashMap<u32, Vec<u32>> = HashMap::new();
+        for e in cut.edges() {
+            let [a, b] = e.v;
+            if cut.positions()[a as usize].x == 0.0 && cut.positions()[b as usize].x == 0.0 {
+                adj.entry(a).or_default().push(b);
+                adj.entry(b).or_default().push(a);
+            }
+        }
+        adj
+    };
+    let remap = |v: u32| new_index[v as usize];
+    let on_mid = |v: u32| cut.positions()[v as usize].x == 0.0;
+    let mut out: Vec<CurvePath> = Vec::new();
+    let mut half_paths = paths.into_iter();
+    for (c, h) in plan {
+        let meta = |name: String, closed: bool, vertices: Vec<u32>| CurvePath {
+            name,
+            kind: c.kind,
+            closed,
+            vertices,
+            seam_finish: c.seam_finish,
+            edge_finish: c.edge_finish,
+        };
+        match h {
+            HalfCurve::Centre { guide } => {
+                let placeholder = half_paths.next().expect("one path per centre curve");
+                let (a, b) = (
+                    remap(placeholder.vertices[0]),
+                    remap(*placeholder.vertices.last().expect("two ends")),
+                );
+                let route = midline_route(&cut, &mid_adj, a, b, guide).ok_or_else(|| {
+                    Error::Garment(format!(
+                        "curve '{}' does not follow the centre line",
+                        c.name
+                    ))
+                })?;
+                out.push(meta(c.name.clone(), false, route));
+            }
+            HalfCurve::Runs(runs) => {
+                for _ in 0..runs.len() {
+                    let hp = half_paths.next().expect("one path per run");
+                    let r: Vec<u32> = hp.vertices.iter().map(|&v| remap(v)).collect();
+                    if r.contains(&u32::MAX) {
+                        return Err(Error::Garment(format!(
+                            "curve '{}' crosses the centre line of the body; end it on the centre \
+                             line or tick 'Asymmetric design'",
+                            c.name
+                        )));
+                    }
+                    // The mirror image, reversed so that "left of the
+                    // curve" maps to the mirror of the same side.
+                    let back: Vec<u32> = r.iter().rev().map(|&v| mirror[v as usize]).collect();
+                    let n = r.len();
+                    let (first, last) = (on_mid(r[0]), on_mid(r[n - 1]));
+                    if hp.closed {
+                        out.push(meta(c.name.clone(), true, r));
+                        out.push(meta(format!("{} (mirror)", c.name), true, back));
+                    } else if first && last && n > 2 {
+                        let mut v = r.clone();
+                        v.extend_from_slice(&back[1..back.len() - 1]);
+                        out.push(meta(c.name.clone(), true, v));
+                    } else if last {
+                        let mut v = r.clone();
+                        v.extend_from_slice(&back[1..]);
+                        out.push(meta(c.name.clone(), false, v));
+                    } else if first {
+                        let mut v = back.clone();
+                        v.extend_from_slice(&r[1..]);
+                        out.push(meta(c.name.clone(), false, v));
+                    } else {
+                        out.push(meta(c.name.clone(), false, r));
+                        out.push(meta(format!("{} (mirror)", c.name), false, back));
+                    }
+                }
+            }
+        }
+    }
+    Ok((cut, out, Some(mirror)))
+}
+
+/// The way along the midline from `a` to `b` that passes nearest `guide`.
+fn midline_route(
+    mesh: &Mesh,
+    adj: &HashMap<u32, Vec<u32>>,
+    a: u32,
+    b: u32,
+    guide: DVec3,
+) -> Option<Vec<u32>> {
+    let p = mesh.positions();
+    let mut best: Option<(f64, Vec<u32>)> = None;
+    for &first in adj.get(&a)? {
+        let mut route = vec![a, first];
+        let mut ok = true;
+        while *route.last().expect("non-empty") != b {
+            let (prev, cur) = (route[route.len() - 2], route[route.len() - 1]);
+            let next = adj
+                .get(&cur)
+                .and_then(|n| n.iter().copied().find(|&x| x != prev));
+            match next {
+                Some(x) if !route.contains(&x) => route.push(x),
+                _ => {
+                    ok = false;
+                    break;
+                }
+            }
+        }
+        if ok {
+            let d = route
+                .iter()
+                .map(|&v| p[v as usize].distance(guide))
+                .fold(f64::INFINITY, f64::min);
+            if best.as_ref().is_none_or(|(bd, _)| d < *bd) {
+                best = Some((d, route));
+            }
+        }
+    }
+    best.map(|(_, r)| r)
+}
+
+/// Embed each curve, and the mirror image of mirrored curves, into the
+/// full body.
+fn embed_both_sides(body: &Mesh, design_curves: &[Curve]) -> Result<(EditMesh, Vec<CurvePath>)> {
+    let (pos0, tri0) = (body.positions(), body.triangles());
+    let mut curves: Vec<Curve> = Vec::new();
+    for c in design_curves {
+        curves.push(c.clone());
+        if c.mirror {
+            let points = c
+                .points
+                .iter()
+                .map(|&p| mirror_point(pos0, tri0, p).expect("checked"))
+                .collect();
+            curves.push(Curve {
+                name: format!("{} (mirror)", c.name),
+                points,
+                mirror: false,
+                ..c.clone()
+            });
+        }
+    }
+    curves.sort_by_key(|c| c.kind == CurveKind::Seam);
+    let mut m = EditMesh::new(pos0.to_vec(), tri0.to_vec());
+    let mut paths: Vec<CurvePath> = Vec::new();
+    for c in &curves {
+        let control: Vec<DVec3> = c
+            .points
+            .iter()
+            .map(|sp| sp.position(pos0, tri0).expect("checked"))
+            .collect();
+        let samples = smooth(&control, c.closed, SAMPLE_MM);
+        let path = embed_samples(&mut m, &mut paths, c, c.closed, &samples)?;
+        paths.push(CurvePath {
+            name: c.name.clone(),
+            kind: c.kind,
+            closed: c.closed,
+            vertices: path,
+            seam_finish: c.seam_finish,
+            edge_finish: c.edge_finish,
+        });
+    }
+    cleanup(&mut m, &mut paths);
+    Ok((m, paths))
+}
+
+/// Cut a sampled curve into `m`: each sample becomes a vertex (seam ends
+/// snap onto earlier curves), joined by plane walks.
+fn embed_samples(
+    m: &mut EditMesh,
+    paths: &mut [CurvePath],
+    c: &Curve,
+    closed: bool,
+    samples: &[DVec3],
+) -> Result<Vec<u32>> {
+    let n = samples.len();
+    let mut verts = Vec::with_capacity(n);
+    for (k, &p) in samples.iter().enumerate() {
+        let end = !closed && (k == 0 || k == n - 1);
+        let snapped = if end && c.kind == CurveKind::Seam {
+            nearest_curve_vertex(m, paths, p, SNAP_MM)
+        } else {
+            None
+        };
+        let v = match snapped {
+            Some(v) => v,
+            None => {
+                let here = locate(&m.positions, &m.triangles, p);
+                m.insert_point(here, POINT_SNAP)
+            }
+        };
+        if verts.last() != Some(&v) {
+            verts.push(v);
+        }
+    }
+    if closed && verts.len() > 1 && verts.first() == verts.last() {
+        verts.pop();
+    }
+    let mut path = vec![verts[0]];
+    let segments = if closed { verts.len() } else { verts.len() - 1 };
+    for s in 0..segments {
+        let (a, b) = (verts[s], verts[(s + 1) % verts.len()]);
+        if a == b {
+            continue;
+        }
+        let start = path.len();
+        if walk(m, paths, &mut path, a, b).is_err() {
+            // The plane through the two points does not join them on
+            // the surface (e.g. through the armpit): fall back to the
+            // shortest route along mesh edges.
+            path.truncate(start);
+            shortest_edge_path(m, a, b, &mut path).ok_or_else(|| {
+                Error::Garment(format!("curve '{}' crosses a gap in the body", c.name))
+            })?;
+        }
+    }
+    if closed && path.len() > 1 && path.first() == path.last() {
+        path.pop();
+    }
+    Ok(path)
 }
 
 /// Collapse very short edges and relax the triangles around curves.
@@ -815,7 +1274,13 @@ fn walk(
             Step::Vertex(x) => {
                 // Move the corner onto the curve's plane (unless it already
                 // carries a curve, which must stay where it is).
-                if !paths.iter().any(|c| c.vertices.contains(&x)) && !path.contains(&x) {
+                let crosses_midline =
+                    m.keep_midline && (p.x < 0.0) != (m.positions[x as usize].x < 0.0);
+                if !paths.iter().any(|c| c.vertices.contains(&x))
+                    && !path.contains(&x)
+                    && !m.pinned(x)
+                    && !crosses_midline
+                {
                     m.positions[x as usize] = p;
                 }
                 x
@@ -1225,12 +1690,74 @@ pub(crate) mod tests {
         for (t, pieces) in TEMPLATES.iter().zip([2, 2, 4, 4]) {
             let g = build(&mesh, &(t.build)(&mesh, &tapes)).unwrap();
             assert!(g.warnings.is_empty(), "{}: {:?}", t.id, g.warnings);
+            // Built symmetric: every garment vertex has a mirror image.
+            let gm = g.mesh.as_ref().unwrap();
+            let mirror = g.mirror.as_ref().expect("symmetric build");
+            for (v, &w) in mirror.iter().enumerate() {
+                let (p, q) = (gm.positions()[v], gm.positions()[w as usize]);
+                assert!(
+                    (p.x + q.x).abs() < 1e-9 && p.y == q.y && p.z == q.z,
+                    "{}",
+                    t.id
+                );
+                assert_eq!(mirror[w as usize] as usize, v);
+            }
             let faces = panel_faces(&g).unwrap();
             let sizes: Vec<usize> = faces.iter().map(|f| f.len()).collect();
             assert_eq!(sizes.len(), pieces, "{}: piece sizes {sizes:?}", t.id);
             // No slivers where seams meet.
             assert!(sizes.iter().all(|&n| n > 100), "{}: {sizes:?}", t.id);
         }
+    }
+
+    #[test]
+    fn symmetric_garments_give_mirror_image_pieces() {
+        use super::examples::{cincher, top};
+        use crate::flatten::{flatten_garment, FlattenOptions};
+        use crate::outline::mirror_partners;
+        let (mesh, tapes) = body();
+        // The cincher: left and right fronts and backs; the top: front and
+        // back, each symmetric about the centre line.
+        for (design, expect_pairs) in [(cincher(&mesh, &tapes), true), (top(&mesh, &tapes), false)]
+        {
+            let g = build(&mesh, &design).unwrap();
+            let gm = g.mesh.as_ref().unwrap();
+            let opts = FlattenOptions {
+                mirror: g.mirror.clone(),
+                outline_smoothing_mm: crate::flatten::DEFAULT_OUTLINE_SMOOTHING_MM,
+                ..Default::default()
+            };
+            let flat = flatten_garment(gm, &g.seams, &opts).unwrap();
+            let m = g.mirror.as_ref().unwrap();
+            let partners = mirror_partners(gm, m, &flat.panels);
+            for (q, part) in partners.iter().enumerate() {
+                let (p, map) = part.as_ref().expect("every piece has a mirror image");
+                assert_eq!(flat.mirrored[q], Some(*p));
+                assert_eq!(*p != q, expect_pairs);
+                // Distances between corresponding points agree exactly:
+                // the layouts are congruent by a reflection.
+                let (a, b) = (&flat.panels[q].uv, &flat.panels[*p].uv);
+                for i in (0..a.len()).step_by(7) {
+                    for j in (0..a.len()).step_by(11) {
+                        let d1 = a[i].distance(a[j]);
+                        let d2 = b[map[i] as usize].distance(b[map[j] as usize]);
+                        assert!((d1 - d2).abs() < 1e-6, "{d1} vs {d2}");
+                    }
+                }
+                let (s1, s2) = (&flat.panels[q].strain, &flat.panels[*p].strain);
+                assert!((s1.p95_stretch - s2.p95_stretch).abs() < 1e-9);
+            }
+        }
+    }
+
+    #[test]
+    fn asymmetric_designs_build_each_side() {
+        let (mesh, tapes) = body();
+        let mut design = top(&mesh, &tapes);
+        design.asymmetric = true;
+        let g = build(&mesh, &design).unwrap();
+        assert!(g.mirror.is_none());
+        assert_eq!(panel_faces(&g).unwrap().len(), 2);
     }
 
     #[test]

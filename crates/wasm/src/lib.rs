@@ -261,6 +261,7 @@ fn run(request: &str) -> Result<Value, String> {
                     options.ease_zones = zones.clone();
                     options.materials = plan.clone();
                     options.edges = g.edges.clone();
+                    options.mirror = g.mirror.clone();
                     Some(job::run(m, &g.seams, &options).map_err(|e| e.to_string())?)
                 }
                 (None, true) => {

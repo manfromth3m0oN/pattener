@@ -270,6 +270,7 @@ function drawMarks() {
 
 let garmentBusy = false, garmentAgain = false;
 async function refreshGarment() {
+  $('g-asym').checked = !!design.asymmetric;
   renderCurveList();
   renderZones();
   lastFit = null;
@@ -329,6 +330,10 @@ function changed() {
   saveLocal();
   refreshGarment();
 }
+$('g-asym').onchange = () => {
+  if ($('g-asym').checked) design.asymmetric = true; else delete design.asymmetric;
+  changed();
+};
 
 if (viewer) {
   viewer.onClick = (e) => {
@@ -739,8 +744,9 @@ function show(output, extraFiles) {
   if (output.layout_svg) dl.appendChild(fileLink('layout.svg', output.layout_svg, 'image/svg+xml'));
   dl.appendChild(fileLink('report.json', JSON.stringify(r, null, 2), 'application/json'));
 
+  const pairing = (p) => (p.mirror_of == null ? '' : p.mirror_of === p.index ? ' (symmetric)' : ` (mirror of ${p.mirror_of})`);
   table($('panel-table'), ['panel', 'ease', 'min σ', '95 % under', 'max σ', 'slack', 'mmHg', '95 % under', 'bridging', 'cut size (mm)', 'seams'],
-    r.panels.map((p) => [p.index, f(p.ease, 3), f(p.min_stretch, 3), f(p.p95_stretch, 3), f(p.max_stretch, 3),
+    r.panels.map((p) => [`${p.index}${pairing(p)}`, f(p.ease, 3), f(p.min_stretch, 3), f(p.p95_stretch, 3), f(p.max_stretch, 3),
       `${f(100 * p.slack_fraction, 0)} %`, f(p.mean_pressure_mmhg, 1), f(p.p95_pressure_mmhg, 1), `${f(100 * p.bridging_fraction, 0)} %`,
       `${f(p.cut_width_mm)} × ${f(p.cut_height_mm)}`, p.seams.join(', ')]));
   table($('seam-table'), ['seam', 'panels', 'body (mm)', 'flat (mm)', 'mismatch (mm)', 'before matching'],
@@ -858,6 +864,7 @@ async function run() {
         notch_spacing: num('notch') > 0 ? num('notch') : null,
         zip_allowance: num('zip'),
       },
+      outline_smoothing_mm: Math.max(0, num('smooth')),
       print: $('paper').value ? { paper: $('paper').value } : null,
       heatmap: $('heatmap').value || null,
       length_relief: Math.max(0, Math.min(100, num('length-relief'))) / 100,

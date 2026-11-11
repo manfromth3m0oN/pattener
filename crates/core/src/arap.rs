@@ -101,8 +101,27 @@ pub fn arap(
     opts: &ArapOptions,
     targets: &[EdgeTarget],
 ) -> Result<ArapResult> {
+    let mut pinned = vec![false; panel.vertex_count()];
+    if let Some(p) = pinned.first_mut() {
+        *p = true;
+    }
+    arap_pinned(panel, refs, init, opts, targets, &pinned)
+}
+
+/// [`arap`] with the vertices marked in `pinned` (at least one) held at
+/// their `init` positions.
+pub fn arap_pinned(
+    panel: &Panel,
+    refs: &[[DVec2; 3]],
+    init: &[DVec2],
+    opts: &ArapOptions,
+    targets: &[EdgeTarget],
+    pinned: &[bool],
+) -> Result<ArapResult> {
     assert_eq!(refs.len(), panel.triangles.len());
     assert_eq!(init.len(), panel.vertex_count());
+    assert_eq!(pinned.len(), panel.vertex_count());
+    assert!(pinned.contains(&true), "pin at least one vertex");
     let n = panel.vertex_count();
 
     // Cotangent weights of the reference shapes (see
@@ -129,18 +148,17 @@ pub fn arap(
         });
     }
 
-    // Laplacian with vertex `pin` removed.
-    let pin = 0usize;
-    let free = |i: usize| {
-        if i < pin {
-            Some(i)
-        } else if i > pin {
-            Some(i - 1)
-        } else {
-            None
+    // Laplacian with the pinned vertices removed.
+    let mut free_index = vec![None; n];
+    let mut n_free = 0;
+    for i in 0..n {
+        if !pinned[i] {
+            free_index[i] = Some(n_free);
+            n_free += 1;
         }
-    };
-    let mut lap = SymBuilder::new(n - 1);
+    }
+    let free = |i: usize| free_index[i];
+    let mut lap = SymBuilder::new(n_free);
     for sp in &springs {
         let (i, j, wk) = (sp.i, sp.j, sp.w);
         for (a, b, v) in [(i, i, wk), (j, j, wk), (i, j, -wk), (j, i, -wk)] {
@@ -188,19 +206,19 @@ pub fn arap(
             d[base + k] = e.length * dir;
         }
 
-        // Global step: L u = Σ ±w d, with the pinned vertex moved to the right.
-        let mut bx = vec![0.0; n - 1];
-        let mut by = vec![0.0; n - 1];
-        let p0 = uv[pin];
+        // Global step: L u = Σ ±w d, with the pinned vertices moved to the
+        // right.
+        let mut bx = vec![0.0; n_free];
+        let mut by = vec![0.0; n_free];
         for (sp, dk) in springs.iter().zip(&d) {
             let r = sp.w * *dk;
             for (a, other, sign) in [(sp.i, sp.j, 1.0), (sp.j, sp.i, -1.0)] {
                 if let Some(fa) = free(a) {
                     bx[fa] += sign * r.x;
                     by[fa] += sign * r.y;
-                    if other == pin {
-                        bx[fa] += sp.w * p0.x;
-                        by[fa] += sp.w * p0.y;
+                    if pinned[other] {
+                        bx[fa] += sp.w * uv[other].x;
+                        by[fa] += sp.w * uv[other].y;
                     }
                 }
             }

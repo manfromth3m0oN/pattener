@@ -94,6 +94,20 @@ laid out on its roll width (`layout_<sheet>.svg`). The materials list
 gives the length of each roll to buy, the area of the pieces, how much of
 the roll is used, and the cost.
 
+### Symmetric pieces and smooth outlines
+
+Garments are **symmetric** by default:
+- **Built on one side:** the design is built on the right half of the body and mirrored. The body model is exactly symmetric, so every point of the cut garment has an exact mirror partner. Curves drawn on the left are flipped across. Loops such as necklines are cut at the centre line. Curves drawn along the centre line follow it exactly.
+- **Pairs and centre pieces:** a pair of pieces such as the left and right fronts comes out as exact mirror images, with mirrored notches. A piece across the centre line comes out exactly symmetric. Pieces are labelled *mirror image of panel N* or *symmetric*.
+- **One-sided designs:** tick **Asymmetric design** to build each side as drawn.
+
+**Outline smoothing:**
+- **Where the kinks come from:** a flat outline joins the points where the curves were cut into the body mesh, so it carries small kinks.
+- **What is smoothed:** each stretch of outline between corners (where the seam or neighbouring piece changes, or the outline turns sharply) is smoothed over about **10 mm**.
+- **How:** a Gaussian applied by "twicing", which removes short wiggles without shrinking curves. Points only move across the outline.
+- **Keeping triangles in shape:** the inside of the piece is then flattened again with the outline held in place, so the stretch figures stay meaningful.
+- **Setting it:** `--smooth-outline MM`, or "Smooth outlines (mm)" in the web app; 0 turns it off.
+
 ### Templates
 
 **Start from template** replaces the garment with one of these starting
@@ -207,6 +221,7 @@ cargo run --release -p latexpat -- flatten body.obj --seams seams.json --ease 0.
 | `--sheet-gap MM` | gap between pieces on the sheet (default 5) |
 | `--no-rotate` | keep pieces upright on the sheet |
 | `--zip-allowance MM` | strip on each side of a zip seam (default 10) |
+| `--smooth-outline MM` | smooth piece outlines over about this distance (default 10; 0 = off) |
 | `--pdf PAPER` | also write `pattern.pdf`, tiled over `a4` or `letter` pages |
 
 Output:
@@ -329,6 +344,8 @@ to GitHub Pages (Settings → Pages → Source must be "GitHub Actions").
 9. `flatten::orient` + `svg::panel_svg` / `svg::layout_svg`: upright
    placement and SVG export; `pdf::pattern_pdf` tiles the pieces for
    printing and `assembly::assembly_steps` writes the gluing order.
+   Before that, `outline` smooths each piece's outline and, for a
+   symmetric garment, makes mirror-image pieces exact mirror images.
 
 `body::torso` builds the mesh and seams from measurements, and `job::run`
 wraps steps 2–9 into one call returning SVG strings, a report and warnings;

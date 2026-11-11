@@ -117,6 +117,9 @@ pub struct EditMesh {
     pub positions: Vec<DVec3>,
     pub triangles: Vec<[u32; 3]>,
     vertex_faces: Vec<Vec<u32>>,
+    /// Keep vertices on the midplane `x = 0` there (see
+    /// [`EditMesh::pinned`]).
+    pub keep_midline: bool,
 }
 
 impl EditMesh {
@@ -131,7 +134,14 @@ impl EditMesh {
             positions,
             triangles,
             vertex_faces,
+            keep_midline: false,
         }
+    }
+
+    /// With [`EditMesh::keep_midline`], vertices on the plane `x = 0` stay
+    /// exactly on it: they are never moved, relaxed or collapsed away.
+    pub fn pinned(&self, v: u32) -> bool {
+        self.keep_midline && self.positions[v as usize].x == 0.0
     }
 
     /// Faces using vertex `v`.
@@ -251,6 +261,9 @@ impl EditMesh {
     /// opposite vertices) or a face around `a` would flip. Removed faces
     /// become `[u32::MAX; 3]`; see [`EditMesh::live_triangles`].
     pub fn collapse(&mut self, a: u32, b: u32) -> bool {
+        if self.pinned(a) && !self.pinned(b) {
+            return false;
+        }
         let shared = self.edge_faces(a, b);
         if shared.len() != 2 {
             return false;
@@ -311,6 +324,9 @@ impl EditMesh {
     /// Move `v` a fraction `k` towards the centroid of its neighbours,
     /// within its tangent plane, unless that would flip a face.
     pub fn relax(&mut self, v: u32, k: f64) {
+        if self.pinned(v) {
+            return;
+        }
         let n = self.neighbors(v);
         if n.is_empty() {
             return;
@@ -321,6 +337,9 @@ impl EditMesh {
         let mut d = c - p;
         d -= d.dot(normal) * normal;
         let q = p + k * d;
+        if self.keep_midline && (q.x < 0.0) != (p.x < 0.0) {
+            return;
+        }
         let faces = self.vertex_faces[v as usize].clone();
         let before: Vec<DVec3> = faces
             .iter()

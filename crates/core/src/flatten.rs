@@ -1,11 +1,11 @@
 //! End-to-end flattening: cut → LSCM → ARAP → seam matching → strain.
 
-use crate::arap::{arap, ArapOptions, EdgeTarget};
+use crate::arap::{arap, arap_pinned, ArapOptions, EdgeTarget};
 use crate::cut::cut_panels;
 use crate::ease::{reference_triangles, Ease};
 use crate::error::{Error, Result};
 use crate::lscm::lscm;
-use crate::mesh::Mesh;
+use crate::mesh::{EdgeId, Mesh};
 use crate::panel::Panel;
 use crate::seam_match::{
     flat_edge_length, pair_seams, seam_edge_pairs, seam_lengths, SeamLengths, SeamPair,
@@ -13,6 +13,7 @@ use crate::seam_match::{
 use crate::seams::SeamSet;
 use crate::strain::{measure, StrainReport};
 use glam::{DVec2, DVec3};
+use std::collections::HashMap;
 
 /// Options for [`flatten_garment`].
 #[derive(Debug, Clone, PartialEq)]
@@ -34,6 +35,14 @@ pub struct FlattenOptions {
     /// [`cut_panels`] order), used to weight seam matching when panels are
     /// cut from different sheets. `None` means all equal.
     pub panel_stiffness: Option<Vec<f64>>,
+    /// Smooth flat outlines with this scale `σ` (mm; see
+    /// [`outline`](crate::outline)); 0 (the default here) keeps them
+    /// exactly as flattened. Pattern jobs use
+    /// [`DEFAULT_OUTLINE_SMOOTHING_MM`].
+    pub outline_smoothing_mm: f64,
+    /// Mirror image of each input-mesh vertex, for an exactly symmetric
+    /// garment: mirror-image pieces then come out as exact mirror images.
+    pub mirror: Option<Vec<u32>>,
 }
 
 impl Default for FlattenOptions {
@@ -46,6 +55,8 @@ impl Default for FlattenOptions {
             panel_stiffness: None,
             length_relief: 1.0,
             along: None,
+            outline_smoothing_mm: 0.0,
+            mirror: None,
         }
     }
 }
@@ -113,7 +124,13 @@ pub struct SeamReport {
 pub struct Garment {
     pub panels: Vec<FlatPanel>,
     pub seams: Vec<SeamReport>,
+    /// Per panel, the panel it is the mirror image of (itself for a
+    /// symmetric panel on the centre line), for a symmetric garment.
+    pub mirrored: Vec<Option<usize>>,
 }
+
+/// Outline smoothing scale `σ` (mm) used by pattern jobs by default.
+pub const DEFAULT_OUTLINE_SMOOTHING_MM: f64 = 10.0;
 
 /// A panel together with its flat layout and strain report.
 #[derive(Debug, Clone)]
@@ -365,6 +382,33 @@ pub fn flatten_garment(mesh: &Mesh, seams: &SeamSet, opts: &FlattenOptions) -> R
         }
     }
 
+    // Clean outlines: smooth between corners, then mirror.
+    let neighbour = outline_neighbours(&flat);
+    for ((fp, nb), refs) in flat.iter_mut().zip(&neighbour).zip(&eases) {
+        let Some(init) = crate::outline::smoothed_outline(fp, nb, opts.outline_smoothing_mm) else {
+            continue;
+        };
+        let mut pinned = vec![false; fp.uv.len()];
+        for e in &fp.panel.boundary {
+            pinned[e.from as usize] = true;
+        }
+        let r = arap_pinned(&fp.panel, refs, &init, &opts.arap, &[], &pinned)?;
+        // Keep the smoothed piece only if it folds no more than before.
+        let flips = measure(&fp.panel, &r.uv).flipped.len();
+        if flips <= fp.strain.flipped.len() {
+            fp.uv = r.uv;
+        }
+    }
+    let mirrored = match &opts.mirror {
+        Some(m) if m.len() == mesh.positions().len() => {
+            crate::outline::mirror_pieces(mesh, m, &mut flat)
+        }
+        _ => vec![None; flat.len()],
+    };
+    for fp in &mut flat {
+        fp.strain = measure(&fp.panel, &fp.uv);
+    }
+
     let seams = pairs
         .into_iter()
         .zip(unmatched)
@@ -380,7 +424,36 @@ pub fn flatten_garment(mesh: &Mesh, seams: &SeamSet, opts: &FlattenOptions) -> R
     Ok(Garment {
         panels: flat,
         seams,
+        mirrored,
     })
+}
+
+/// For each panel's boundary edges: the seam and the panel across it
+/// (`usize::MAX` for an open edge).
+fn outline_neighbours(flat: &[FlatPanel]) -> Vec<Vec<(Option<usize>, usize)>> {
+    let mut by_edge: HashMap<EdgeId, Vec<usize>> = HashMap::new();
+    for (pi, fp) in flat.iter().enumerate() {
+        for e in &fp.panel.boundary {
+            by_edge.entry(e.mesh_edge).or_default().push(pi);
+        }
+    }
+    flat.iter()
+        .enumerate()
+        .map(|(pi, fp)| {
+            fp.panel
+                .boundary
+                .iter()
+                .map(|e| {
+                    let other = by_edge[&e.mesh_edge]
+                        .iter()
+                        .copied()
+                        .find(|&q| q != pi)
+                        .unwrap_or(usize::MAX);
+                    (e.seam.map(|s| s as usize), other)
+                })
+                .collect()
+        })
+        .collect()
 }
 
 #[cfg(test)]

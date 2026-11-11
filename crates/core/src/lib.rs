@@ -45,6 +45,7 @@ pub mod materials;
 pub mod mesh;
 pub mod nest;
 pub mod obj;
+pub mod outline;
 pub mod panel;
 pub mod pattern;
 pub mod pdf;
