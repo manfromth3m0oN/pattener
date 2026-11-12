@@ -1,5 +1,6 @@
 // Minimal WebGL2 viewer: a shaded triangle mesh plus coloured line loops.
-// Drag to orbit, wheel to zoom, double-click to reset the view.
+// Drag to orbit, wheel or pinch to zoom, double-click or double-tap to
+// reset the view.
 'use strict';
 
 class Viewer {
@@ -47,24 +48,67 @@ class Viewer {
     this.onPress = null;
     this.onDrag = null;
     this.onDragEnd = null;
-    let drag = null, travelled = 0, claimed = false;
+    // Pointers currently down (touch can bring several): one turns the view
+    // or drags a point; two pinch to zoom.
+    const down = new Map();
+    let drag = null, travelled = 0, claimed = false, pinch = null, lastTap = 0;
+    const spread = () => {
+      const [a, b] = [...down.values()];
+      return Math.hypot(a[0] - b[0], a[1] - b[1]);
+    };
     canvas.addEventListener('pointerdown', (e) => {
+      down.set(e.pointerId, [e.clientX, e.clientY]);
+      try { canvas.setPointerCapture(e.pointerId); } catch { /* synthetic events */ }
+      if (down.size === 2) {
+        // A second finger: stop turning or dragging, start pinching.
+        if (claimed && this.onDragEnd) this.onDragEnd(e);
+        claimed = false;
+        drag = null;
+        pinch = { spread: spread(), zoom: this.zoom };
+        return;
+      }
+      if (down.size > 2) return;
       drag = [e.clientX, e.clientY];
       travelled = 0;
       claimed = !!(this.onPress && this.onPress(e));
-      canvas.setPointerCapture(e.pointerId);
     });
-    canvas.addEventListener('pointerup', (e) => {
+    const up = (e) => {
+      if (!down.delete(e.pointerId)) return;
+      if (pinch) {
+        // The pinch ends when the fingers lift; don't turn on the last one.
+        if (down.size === 0) pinch = null;
+        drag = null;
+        return;
+      }
       if (claimed) {
         if (this.onDragEnd) this.onDragEnd(e);
-      } else if (drag && travelled < 5 && this.onClick) {
-        // A click (not a drag) picks a point on the surface.
-        this.onClick(e);
+      } else if (drag && travelled < 5) {
+        // A tap (not a drag) picks a point; two quick taps reset the view.
+        const now = performance.now();
+        if (e.pointerType === 'touch' && now - lastTap < 300) {
+          lastTap = 0;
+          this.resetView();
+          this.draw();
+        } else {
+          lastTap = now;
+          if (this.onClick) this.onClick(e);
+        }
       }
       drag = null;
       claimed = false;
-    });
+    };
+    canvas.addEventListener('pointerup', up);
+    canvas.addEventListener('pointercancel', up);
     canvas.addEventListener('pointermove', (e) => {
+      if (!down.has(e.pointerId)) return;
+      down.set(e.pointerId, [e.clientX, e.clientY]);
+      if (pinch) {
+        if (down.size === 2) {
+          this.zoom = Math.max(0.3, Math.min(3, pinch.zoom * pinch.spread / Math.max(1, spread())));
+          this.draw();
+        }
+        return;
+      }
       if (!drag) return;
       travelled += Math.abs(e.clientX - drag[0]) + Math.abs(e.clientY - drag[1]);
       if (claimed) {

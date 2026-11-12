@@ -54,6 +54,15 @@ MEASURES.forEach(([key, label, hint]) => {
   const span = document.createElement('span');
   span.textContent = label;
   span.title = hint;
+  // Touch screens have no hover: a tap on the name shows how to measure.
+  span.addEventListener('click', (e) => {
+    e.preventDefault();
+    const h = $('measure-hint');
+    const same = !h.hidden && h.dataset.key === key;
+    h.hidden = same;
+    h.dataset.key = key;
+    h.textContent = `${label}: ${hint}`;
+  });
   const input = document.createElement('input');
   input.type = 'number';
   input.step = 'any';

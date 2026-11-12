@@ -34,12 +34,13 @@
           <label><input type="radio" name="figure" value="women" checked> Women's</label>
           <label><input type="radio" name="figure" value="men"> Men's</label>
         </div>
-        <p class="hint">Fill in what you have; the rest is estimated. Hover a name for how to measure it.
+        <p class="hint">Fill in what you have; the rest is estimated. Hover or tap a name for how to measure it.
           Anything between the two figures can be set with the Body type slider below.</p>
         <label>Units
           <select id="units"><option value="cm">cm</option><option value="mm">mm</option><option value="in">inches</option></select>
         </label>
         <div id="measure-inputs" class="measure-grid"></div>
+        <p id="measure-hint" class="hint" hidden></p>
         <h3>Shape</h3>
         <p class="hint">A tape measure can't see these, so set them by eye.</p>
         <div id="shape-inputs" class="shape-grid"></div>
@@ -48,7 +49,7 @@
       </div>
       <div class="body-view">
         <canvas id="viewer" aria-label="3D view of the body"></canvas>
-        <p class="hint">Drag to turn, scroll to zoom, double-click to reset. Orange lines show where each supplied girth is measured.</p>
+        <p class="hint">Drag to turn, scroll or pinch to zoom, double-click or double-tap to reset. Orange lines show where each supplied girth is measured.</p>
         <ul id="fit-warnings"></ul>
 
         <div id="garment-tools">
