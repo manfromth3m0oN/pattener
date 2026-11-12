@@ -583,6 +583,17 @@ pub fn top_raglan(body: &HumanBody) -> GarmentDesign {
     // Where the raglan lines leave the neckline: diagonally front and back.
     let front = extreme(neck, |p| (p.x - c.x) + (p.z - c.z));
     let back = extreme(neck, |p| (p.x - c.x) - (p.z - c.z));
+    // Raglan lines reach the armpit along the front and back of the
+    // armhole, through its creases (halfway down from the shoulder), so
+    // they meet the side seam at the armpit instead of crossing it.
+    let hole = k.armhole();
+    let mid_y = 0.5 * (pit.y + k.shoulder_tip().y);
+    let crease = |front: bool| {
+        extreme(&hole, |p| {
+            let side = if front { p.z } else { -p.z };
+            side - 2.0 * (p.y - mid_y).abs()
+        })
+    };
     GarmentDesign {
         curves: vec![
             edge("hem", b.ring(Hips, 12), false, Some(HEM)),
@@ -608,13 +619,13 @@ pub fn top_raglan(body: &HumanBody) -> GarmentDesign {
             ),
             seam(
                 "front raglan",
-                b.points(&[front, pit]),
+                b.points(&[front, crease(true), pit]),
                 true,
                 SeamFinish::Glued,
             ),
             seam(
                 "back raglan",
-                b.points(&[back, pit]),
+                b.points(&[back, crease(false), pit]),
                 true,
                 SeamFinish::Glued,
             ),

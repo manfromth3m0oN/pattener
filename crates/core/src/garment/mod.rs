@@ -972,7 +972,15 @@ fn embed_samples(
     let mut verts = Vec::with_capacity(n);
     for (k, &p) in samples.iter().enumerate() {
         let end = !closed && (k == 0 || k == n - 1);
-        let snapped = if end && c.kind == CurveKind::Seam {
+        let snapped = if end && m.keep_midline && p.x == 0.0 {
+            // An end on the centre line (a loop cut there): join a curve
+            // already on the centre line nearby, so the two meet exactly.
+            nearest_midline_curve_vertex(m, paths, p, SNAP_MM).or_else(|| {
+                (c.kind == CurveKind::Seam)
+                    .then(|| nearest_curve_vertex(m, paths, p, SNAP_MM))
+                    .flatten()
+            })
+        } else if end && c.kind == CurveKind::Seam {
             nearest_curve_vertex(m, paths, p, SNAP_MM)
         } else {
             None
@@ -984,6 +992,11 @@ fn embed_samples(
                 m.insert_point(here, POINT_SNAP)
             }
         };
+        // Only a curve's ends may lie on the centre line: a point next to
+        // it that landed there would make the curve run along it.
+        if !end && m.pinned(v) {
+            continue;
+        }
         if verts.last() != Some(&v) {
             verts.push(v);
         }
@@ -1167,6 +1180,23 @@ fn path_edges(p: &CurvePath) -> Vec<(u32, u32)> {
     e
 }
 
+/// [`nearest_curve_vertex`] among curve vertices on the centre line.
+fn nearest_midline_curve_vertex(
+    m: &EditMesh,
+    paths: &[CurvePath],
+    p: DVec3,
+    within: f64,
+) -> Option<u32> {
+    paths
+        .iter()
+        .flat_map(|c| c.vertices.iter().copied())
+        .filter(|&v| m.pinned(v))
+        .map(|v| (v, m.positions[v as usize].distance(p)))
+        .filter(|&(_, d)| d <= within)
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(v, _)| v)
+}
+
 fn nearest_curve_vertex(m: &EditMesh, paths: &[CurvePath], p: DVec3, within: f64) -> Option<u32> {
     paths
         .iter()
@@ -1260,6 +1290,9 @@ fn walk(
             };
             let p = match step {
                 Step::Vertex(x) if visited.contains(&x) => continue,
+                // Never run along the centre line (it would leave a spur
+                // there instead of crossing it).
+                Step::Vertex(x) if x != b && m.pinned(v) && m.pinned(x) => continue,
                 Step::Vertex(x) => {
                     let q = m.positions[x as usize];
                     q - d(q) * normal
@@ -1345,6 +1378,10 @@ fn shortest_edge_path(m: &EditMesh, a: u32, b: u32, path: &mut Vec<u32>) -> Opti
         }
         for &f in m.faces_of(v) {
             for w in m.triangles[f as usize] {
+                // Never along the centre line (see `walk`).
+                if w != b && m.pinned(w) {
+                    continue;
+                }
                 let nd = d + m.positions[v as usize].distance(m.positions[w as usize]);
                 if nd < dist[w as usize] {
                     dist[w as usize] = nd;
@@ -1382,9 +1419,18 @@ pub(crate) mod tests {
 
     /// The default body and its tape loops.
     pub(crate) fn fitted() -> crate::human::HumanBody {
+        fitted_as(0.0)
+    }
+
+    /// The default body with the given body type (0 feminine, 1 masculine).
+    pub(crate) fn fitted_as(body_type: f64) -> crate::human::HumanBody {
         let m = test_model();
         let me = Measurer::new(&m).unwrap();
-        fit(&m, &me, &Measurements::new(), &ShapeOptions::default()).unwrap()
+        let shape = ShapeOptions {
+            body_type,
+            ..Default::default()
+        };
+        fit(&m, &me, &Measurements::new(), &shape).unwrap()
     }
 
     pub(crate) fn body() -> (Mesh, Vec<(MeasureKind, Vec<DVec3>)>) {
@@ -1705,49 +1751,57 @@ pub(crate) mod tests {
     #[test]
     fn every_template_makes_its_pieces() {
         use super::examples::TEMPLATES;
-        let fitted = fitted();
-        let mesh = &fitted.mesh;
-        for (t, pieces) in TEMPLATES.iter().zip([2, 4, 4, 4, 2, 4, 7, 4]) {
-            let g = build(mesh, &(t.build)(&fitted)).unwrap();
-            assert!(g.warnings.is_empty(), "{}: {:?}", t.id, g.warnings);
-            // Evenly triangulated: no slivers.
-            let gm = g.mesh.as_ref().unwrap();
-            let angles: Vec<f64> = gm
-                .triangles()
-                .iter()
-                .map(|t| {
-                    let [a, b, c] = t.map(|i| gm.positions()[i as usize]);
-                    (b - a)
-                        .angle_between(c - a)
-                        .min((a - b).angle_between(c - b))
-                        .min((a - c).angle_between(b - c))
-                })
-                .collect();
-            let thin = angles.iter().filter(|&&x| x < 15f64.to_radians()).count();
-            // (Without re-triangulation 4–7 % are; what remains sits
-            // between curve vertices, which stay where they are.)
-            assert!(
-                thin * 60 < angles.len(),
-                "{}: {thin} of {} triangles have an angle under 15°",
-                t.id,
-                angles.len()
-            );
-            // Built symmetric: every garment vertex has a mirror image.
-            let mirror = g.mirror.as_ref().expect("symmetric build");
-            for (v, &w) in mirror.iter().enumerate() {
-                let (p, q) = (gm.positions()[v], gm.positions()[w as usize]);
+        // On the women's and the men's figure alike.
+        for body_type in [0.0, 1.0] {
+            let fitted = fitted_as(body_type);
+            let mesh = &fitted.mesh;
+            for (t, pieces) in TEMPLATES.iter().zip([2, 4, 4, 4, 2, 4, 7, 4]) {
+                let g = build(mesh, &(t.build)(&fitted)).unwrap();
+                assert!(g.warnings.is_empty(), "{}: {:?}", t.id, g.warnings);
+                // Evenly triangulated: no slivers.
+                let gm = g.mesh.as_ref().unwrap();
+                let angles: Vec<f64> = gm
+                    .triangles()
+                    .iter()
+                    .map(|t| {
+                        let [a, b, c] = t.map(|i| gm.positions()[i as usize]);
+                        (b - a)
+                            .angle_between(c - a)
+                            .min((a - b).angle_between(c - b))
+                            .min((a - c).angle_between(b - c))
+                    })
+                    .collect();
+                let thin = angles.iter().filter(|&&x| x < 15f64.to_radians()).count();
+                // (Without re-triangulation 4–7 % are; what remains sits
+                // between curve vertices, which stay where they are.)
                 assert!(
-                    (p.x + q.x).abs() < 1e-9 && p.y == q.y && p.z == q.z,
-                    "{}",
+                    thin * 60 < angles.len(),
+                    "{}: {thin} of {} triangles have an angle under 15°",
+                    t.id,
+                    angles.len()
+                );
+                // Built symmetric: every garment vertex has a mirror image.
+                let mirror = g.mirror.as_ref().expect("symmetric build");
+                for (v, &w) in mirror.iter().enumerate() {
+                    let (p, q) = (gm.positions()[v], gm.positions()[w as usize]);
+                    assert!(
+                        (p.x + q.x).abs() < 1e-9 && p.y == q.y && p.z == q.z,
+                        "{}",
+                        t.id
+                    );
+                    assert_eq!(mirror[w as usize] as usize, v);
+                }
+                let faces = panel_faces(&g).unwrap();
+                let sizes: Vec<usize> = faces.iter().map(|f| f.len()).collect();
+                assert_eq!(
+                    sizes.len(),
+                    pieces,
+                    "{} ({body_type}): piece sizes {sizes:?}",
                     t.id
                 );
-                assert_eq!(mirror[w as usize] as usize, v);
+                // No slivers where seams meet (a gusset is small but real).
+                assert!(sizes.iter().all(|&n| n > 30), "{}: {sizes:?}", t.id);
             }
-            let faces = panel_faces(&g).unwrap();
-            let sizes: Vec<usize> = faces.iter().map(|f| f.len()).collect();
-            assert_eq!(sizes.len(), pieces, "{}: piece sizes {sizes:?}", t.id);
-            // No slivers where seams meet (a gusset is small but real).
-            assert!(sizes.iter().all(|&n| n > 30), "{}: {sizes:?}", t.id);
         }
     }
 

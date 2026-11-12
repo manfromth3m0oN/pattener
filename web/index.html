@@ -30,7 +30,12 @@
 
     <div id="human-panel" class="body-layout">
       <div class="body-inputs">
-        <p class="hint">Fill in what you have; the rest is estimated. Hover a name for how to measure it.</p>
+        <div class="tabs" role="radiogroup" aria-label="Figure">
+          <label><input type="radio" name="figure" value="women" checked> Women's</label>
+          <label><input type="radio" name="figure" value="men"> Men's</label>
+        </div>
+        <p class="hint">Fill in what you have; the rest is estimated. Hover a name for how to measure it.
+          Anything between the two figures can be set with the Body type slider below.</p>
         <label>Units
           <select id="units"><option value="cm">cm</option><option value="mm">mm</option><option value="in">inches</option></select>
         </label>
