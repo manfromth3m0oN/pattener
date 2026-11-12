@@ -22,7 +22,8 @@ th:first-child, td:first-child { text-align: left; }
 #status { margin-left: 1rem; color: #555; }
 #warnings li { color: #a14a00; }
 .error { color: #b00020; }
-#downloads a { margin-right: 0.8rem; }
+#downloads, #body-downloads { display: flex; flex-wrap: wrap; gap: 0.3rem 0.8rem; align-items: baseline; }
+#downloads a { overflow-wrap: anywhere; }
 .pieces { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 1rem; margin-top: 1rem; }
 .piece { border: 1px solid #e3e3e3; border-radius: 6px; padding: 0.5rem; text-align: center; }
 .piece img, #layout img { width: 100%; height: auto; background: white; }
@@ -41,7 +42,6 @@ th:first-child, td:first-child { text-align: left; }
 #viewer { width: 100%; height: 520px; border: 1px solid #e3e3e3; border-radius: 6px; touch-action: none; display: block; }
 #fit-table td.off { color: #a14a00; font-weight: 600; }
 #fit-warnings li { color: #a14a00; }
-#body-downloads a { margin-right: 0.8rem; }
 
 .toolbar { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; margin: 0.4rem 0; }
 .toolbar label { margin: 0; flex-direction: row; align-items: center; gap: 0.3rem; }
@@ -66,3 +66,42 @@ h4 { margin: 0.6rem 0 0.2rem; font-size: 0.95rem; }
 #sheets input[type=color] { width: 2.5rem; padding: 0.1rem; height: 1.9rem; }
 .swatch { display: inline-block; width: 0.9rem; height: 0.9rem; border-radius: 3px; vertical-align: middle; margin-right: 0.35rem; border: 1px solid #0003; }
 #materials-out img { width: 100%; max-height: 60vh; object-fit: contain; border: 1px solid #e3e3e3; background: white; }
+
+/* ---- small screens and touch ------------------------------------------- */
+/* Grid columns may shrink below their content (the 3D view's canvas would
+   otherwise widen its column past the screen). */
+.body-layout > * { min-width: 0; }
+/* Wide tables scroll sideways inside their section instead of widening the
+   page. */
+#sheets, #fit-table, #panel-table, #seam-table, #g-zones, #levels, #materials-out table {
+  display: block; overflow-x: auto; max-width: 100%;
+}
+#measure-hint { margin: 0.2rem 0 0.4rem; }
+select { max-width: 100%; }
+img { max-width: 100%; height: auto; }
+.toolbar-group { flex-wrap: wrap; max-width: 100%; }
+
+@media (max-width: 800px) {
+  body { padding: 0.5rem 0.6rem 2rem; }
+  section { padding: 0.75rem 0.8rem; margin: 0.6rem 0; }
+  label { margin-right: 0.6rem; }
+  /* The 3D view stays at the top of the screen while the garment tools
+     below it scroll, so you can tap the body and reach the buttons. */
+  #viewer { height: 46vh; position: sticky; top: 0; z-index: 2; background: #fafafa; }
+  /* Scrolling something into view (focus, find) keeps it below the view. */
+  html { scroll-padding-top: calc(46vh + 0.5rem); }
+  .grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+  .pieces { grid-template-columns: 1fr; }
+  #status { display: block; margin: 0.5rem 0 0; }
+}
+
+@media (pointer: coarse) {
+  /* Finger-sized controls; 16 px text stops iOS zooming into fields. */
+  input, select, button { font-size: 16px; }
+  button, select, input[type=number], input[type=text] { min-height: 2.6rem; }
+  .file-button { min-height: 2.6rem; }
+  input[type=range] { height: 2rem; }
+  input[type=checkbox], input[type=radio] { width: 1.3rem; height: 1.3rem; }
+  .curve-list li { padding: 0.55rem 0.5rem; }
+  .measure-grid label span { border-bottom-style: dashed; }
+}

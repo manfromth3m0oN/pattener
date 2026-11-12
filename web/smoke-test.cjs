@@ -3,7 +3,7 @@
 //   node web/smoke-test.cjs http://localhost:8765/
 // Set PW_CHANNEL=chrome to use an installed Google Chrome.
 // Run from the repository root (it uploads files from tests/data).
-const { chromium } = require('playwright');
+const { chromium, devices } = require('playwright');
 const assert = require('assert');
 
 const url = process.argv[2] || 'http://localhost:8765/';
@@ -196,6 +196,54 @@ const done = (p) => p.waitForFunction(
   await page.selectOption('#g-template', 'leggings');
   await page.click('#g-example');
   await page.waitForFunction(() => /2 flat pieces/.test(document.getElementById('g-status').textContent), null, { timeout: 90000 });
+
+  // 5. On a phone: nothing wider than the screen, buttons reachable below
+  // the pinned 3D view, tap-for-help, pinch to zoom, double-tap to reset,
+  // tap to add a point, and the pattern made.
+  const phone = await browser.newContext({ ...devices['iPhone 13'] });
+  const m = await phone.newPage();
+  m.on('pageerror', (e) => errors.push(e.message));
+  m.on('dialog', (d) => d.accept());
+  await m.goto(url);
+  await m.evaluate(() => localStorage.clear());
+  await m.reload();
+  await m.waitForFunction(() => /Fitted/.test(document.getElementById('fit-status').textContent), null, { timeout: 90000 });
+  const fits = () => m.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
+  assert.ok(await fits(), 'page wider than the phone');
+  await m.tap('#measure-inputs label span >> text=Waist height');
+  assert.match(await m.textContent('#measure-hint'), /Waist height: /);
+  await m.waitForFunction(() => document.querySelectorAll('#g-template option').length >= 8);
+  await m.tap('#g-example');
+  await m.waitForFunction(() => /2 flat pieces/.test(document.getElementById('g-status').textContent), null, { timeout: 90000 });
+  const vb = await m.locator('#viewer').boundingBox();
+  const cx = vb.x + vb.width / 2, cy = vb.y + vb.height / 2;
+  const zoom0 = await m.evaluate(() => viewer.zoom);
+  await m.evaluate(([x, y]) => {
+    const c = document.getElementById('viewer');
+    const ev = (type, id, dx) => c.dispatchEvent(new PointerEvent(type, { pointerId: id, pointerType: 'touch', clientX: x + dx, clientY: y, bubbles: true }));
+    ev('pointerdown', 11, -20); ev('pointerdown', 12, 20);
+    for (let k = 1; k <= 5; k++) { ev('pointermove', 11, -20 - 10 * k); ev('pointermove', 12, 20 + 10 * k); }
+    ev('pointerup', 11, -70); ev('pointerup', 12, 70);
+  }, [cx, cy]);
+  assert.ok(await m.evaluate(() => viewer.zoom) < 0.5 * zoom0, 'pinching out zooms in');
+  await m.evaluate(([x, y]) => {
+    const c = document.getElementById('viewer');
+    for (let k = 0; k < 2; k++) {
+      c.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 20 + k, pointerType: 'touch', clientX: x, clientY: y, bubbles: true }));
+      c.dispatchEvent(new PointerEvent('pointerup', { pointerId: 20 + k, pointerType: 'touch', clientX: x, clientY: y, bubbles: true }));
+    }
+  }, [cx, cy]);
+  assert.equal(await m.evaluate(() => viewer.zoom), 1, 'double-tap resets the view');
+  await m.tap('#g-new-seam');
+  const vb2 = await m.locator('#viewer').boundingBox();
+  await m.tap('#viewer', { position: { x: vb2.width * 0.5, y: vb2.height * 0.42 } });
+  await m.waitForFunction(() => /1 point/.test(document.getElementById('g-curves').textContent), null, { timeout: 30000 });
+  await m.tap('#g-delete');
+  await m.tap('#run');
+  await m.waitForFunction(() => /Done|error/i.test(document.getElementById('status').textContent), null, { timeout: 120000 });
+  assert.match(await m.textContent('#status'), /Done .*2 panels/);
+  assert.ok(await fits(), 'results wider than the phone');
+  await phone.close();
 
   assert.deepEqual(errors, []);
   await browser.close();

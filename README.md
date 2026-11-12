@@ -14,6 +14,11 @@ Everything also runs in the browser (WebAssembly, no server-side code).
 Every push to `main` deploys it to GitHub Pages:
 https://manfromth3m0on.github.io/pattener/
 
+It works on phones as well as desktops, with the same features:
+- **3D view:** on a narrow screen it stays pinned at the top while the garment tools scroll beneath it. Pinch to zoom, double-tap to reset, tap to add points.
+- **Measurement help:** tap a measurement's name for how to take it.
+- **Wide tables:** they scroll sideways within their card.
+
 To run it locally:
 
 ```sh
