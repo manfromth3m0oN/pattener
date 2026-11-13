@@ -389,3 +389,34 @@ fn project_construction_and_print() {
     assert_eq!(r["trims"][0]["edge"], "neckline");
     std::fs::remove_dir_all(&out).unwrap();
 }
+
+#[test]
+fn project_pattern_checked_in_a_pose() {
+    let out = std::env::temp_dir().join(format!("latexpat-cli-test-pose-{}", std::process::id()));
+    let o = Command::new(env!("CARGO_BIN_EXE_latexpat"))
+        .arg("flatten")
+        .arg("--project")
+        .arg(data("top.project.json"))
+        .args(["--pose", "arms-out"])
+        .arg("-o")
+        .arg(&out)
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    assert!(String::from_utf8_lossy(&o.stdout).contains("in pose"));
+    let r: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(out.join("report.json")).unwrap()).unwrap();
+    assert!(r["panels"][0]["posed_p95_stretch"].as_f64().unwrap() > 1.0);
+    let bad = Command::new(env!("CARGO_BIN_EXE_latexpat"))
+        .arg("flatten")
+        .arg("--project")
+        .arg(data("top.project.json"))
+        .args(["--pose", "handstand"])
+        .arg("-o")
+        .arg(&out)
+        .output()
+        .unwrap();
+    assert!(!bad.status.success());
+    assert!(String::from_utf8_lossy(&bad.stderr).contains("unknown pose"));
+    std::fs::remove_dir_all(&out).unwrap();
+}

@@ -8,10 +8,13 @@ MakeHuman's `LICENSE.md` (section C) releases its assets, explicitly
 including "the base mesh" and "targets and modifiers", under
 [CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/).
 This file contains only data derived from those assets: the body part of
-the base mesh, 22 landmark joints, and 60 targets (two base shapes
-averaged over MakeHuman's three default ones, weight, muscle, height, cup,
-belly, buttocks and the 20 measurement targets). No MakeHuman source code
-is used or included.
+the base mesh, 22 landmark joints, 60 targets (two base shapes averaged
+over MakeHuman's three default ones, weight, muscle, height, cup, belly,
+buttocks and the 20 measurement targets), and a posing skeleton: the
+default rig (`data/rigs/default.mhskel`, `default_weights.mhw`, also CC0)
+folded into 21 bones that turn about the landmark joints, with each
+vertex's four largest weights. No MakeHuman source code is used or
+included.
 
 To rebuild:
 

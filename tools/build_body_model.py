@@ -20,6 +20,13 @@ File format (little endian), units decimetres as in MakeHuman, Y up, front +Z:
     joints       n_joints x (u8 len, name)
     targets      n_targets x (u8 len, name, f32 scale, u32 count,
                               count x (u16 vertex, i16[3] delta / scale))
+    skin         (optional) "SKIN", u8 n_bones,
+                 n_bones x (u8 len, name, i8 parent or -1, u8 pivot joint),
+                 n_body x (u8 count, count x (u8 bone, u8 weight / 255))
+
+The skin folds MakeHuman's default rig (CC0, data/rigs) into the bones
+below, each turning about one of the landmark joints; a vertex keeps its
+four largest weights.
 """
 import struct
 import sys
@@ -36,6 +43,28 @@ MEASURES = [
     "napetowaist-dist", "waisttohip-dist", "shoulder-dist", "hips-circ", "upperleg-height",
     "thigh-circ", "lowerleg-height", "calf-circ", "ankle-circ", "knee-circ",
 ]
+# Reduced skeleton: (name, parent, pivot joint, MakeHuman bones folded in;
+# a MakeHuman bone not listed folds into its nearest listed ancestor).
+BONES = [
+    ("hips", None, "pelvis", ["root", "pelvis.L", "pelvis.R", "spine05"]),
+    ("spine-lower", "hips", "spine-4", ["spine04"]),
+    ("spine-mid", "spine-lower", "spine-3", ["spine03"]),
+    ("chest", "spine-mid", "spine-2", ["spine02", "breast.L", "breast.R"]),
+    ("upper-chest", "chest", "spine-1", ["spine01"]),
+    ("neck", "upper-chest", "neck", ["neck01", "neck02", "neck03"]),
+    ("head", "neck", "head", ["head"]),
+]
+for side, s_ in (("l", "L"), ("r", "R")):
+    BONES += [
+        (f"{side}-clavicle", "upper-chest", f"{side}-clavicle", [f"clavicle.{s_}", f"shoulder01.{s_}"]),
+        (f"{side}-upper-arm", f"{side}-clavicle", f"{side}-shoulder", [f"upperarm01.{s_}", f"upperarm02.{s_}"]),
+        (f"{side}-forearm", f"{side}-upper-arm", f"{side}-elbow", [f"lowerarm01.{s_}", f"lowerarm02.{s_}"]),
+        (f"{side}-hand", f"{side}-forearm", f"{side}-hand", [f"wrist.{s_}"]),
+        (f"{side}-thigh", "hips", f"{side}-upper-leg", [f"upperleg01.{s_}", f"upperleg02.{s_}"]),
+        (f"{side}-shin", f"{side}-thigh", f"{side}-knee", [f"lowerleg01.{s_}", f"lowerleg02.{s_}"]),
+        (f"{side}-foot", f"{side}-shin", f"{side}-ankle", [f"foot.{s_}"]),
+    ]
+
 M = "macrodetails/"
 U = M + "universal-{g}-young-{m}muscle-{w}weight"
 # output name -> list of source targets to average
@@ -123,8 +152,48 @@ def main(src, dst):
             out += struct.pack("<H3h", i, *(round(x / scale) for x in d))
         print(f"{name:32} {len(items):6} vertices")
 
+    out += skin(data, n_body)
     Path(dst).write_bytes(out)
     print(f"wrote {dst}: {len(out)} bytes, {n_body} body vertices, {len(tris)} triangles")
+
+
+def skin(data, n_body):
+    import json
+    rig = json.load(open(data / "rigs" / "default.mhskel"))["bones"]
+    weights = json.load(open(data / "rigs" / "default_weights.mhw"))["weights"]
+    ours = {mh: k for k, (_, _, _, mhs) in enumerate(BONES) for mh in mhs}
+
+    def fold(mh):
+        while mh not in ours:
+            mh = rig[mh]["parent"]
+        return ours[mh]
+
+    acc = [dict() for _ in range(n_body)]
+    for mh, pairs in weights.items():
+        b = fold(mh)
+        for v, w in pairs:
+            if v < n_body:
+                acc[v][b] = acc[v].get(b, 0.0) + w
+    names = [b[0] for b in BONES]
+    out = bytearray(b"SKIN") + struct.pack("<B", len(BONES))
+    for name, parent, pivot, _ in BONES:
+        out += struct.pack("<B", len(name)) + name.encode()
+        out += struct.pack("<bB", -1 if parent is None else names.index(parent), JOINTS.index(pivot))
+    unweighted = 0
+    for v in range(n_body):
+        top = sorted(acc[v].items(), key=lambda kv: -kv[1])[:4]
+        total = sum(w for _, w in top)
+        if total <= 0:
+            unweighted += 1
+            top, total = [(0, 1.0)], 1.0
+        q = [(b, round(255 * w / total)) for b, w in top]
+        q = [(b, w) for b, w in q if w > 0]
+        q[0] = (q[0][0], q[0][1] + 255 - sum(w for _, w in q))
+        out += struct.pack("<B", len(q))
+        for b, w in q:
+            out += struct.pack("<BB", b, w)
+    print(f"skin: {len(BONES)} bones, {unweighted} unweighted vertices (given to the hips)")
+    return out
 
 
 if __name__ == "__main__":

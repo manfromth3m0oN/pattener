@@ -5,17 +5,23 @@
 //! - [`measure`]: where and how each body measurement is taken.
 //! - [`mod@fit`]: solving the shape parameters so the body matches a set of
 //!   measurements.
+//! - [`mannequin`]: smoothing the anatomical detail a dress form does not
+//!   have.
+//! - [`pose`]: bending the fitted body into poses with its skeleton.
 
 pub mod along;
 pub mod fit;
+pub mod mannequin;
 pub mod measure;
 pub mod model;
+pub mod pose;
 pub mod slice;
 
 pub use along::along_body;
 pub use fit::{fit, HumanBody, Measured, Measurements, ShapeOptions};
 pub use measure::{MeasureKind, Measurer};
-pub use model::{BodyModel, Shape, Target};
+pub use model::{BodyModel, Bone, Shape, Skin, Target};
+pub use pose::{Pose, POSES};
 
 /// The bundled model, read from the repository (tests do not depend on
 /// the `bundled-body` feature).

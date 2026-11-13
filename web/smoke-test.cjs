@@ -159,6 +159,20 @@ const done = (p) => p.waitForFunction(
   const pdfHref = await page.locator('#downloads a', { hasText: 'pattern.pdf' }).getAttribute('href');
   const pdfHead = await page.evaluate(async (u) => (await (await fetch(u)).text()).slice(0, 8), pdfHref);
   assert.equal(pdfHead, '%PDF-1.4');
+  // Posing: the same pattern checked in a squat (body and garment shown in
+  // the pose; the report gains the pose's columns), then back to standing.
+  await page.selectOption('#pose', 'squat');
+  await page.waitForFunction(() => !fitting && !garmentBusy && !garmentAgain
+    && /flat pieces/.test(document.getElementById('g-status').textContent), null, { timeout: 90000 });
+  await page.click('#run');
+  await page.waitForFunction(
+    () => !document.getElementById('run').disabled && /Done|error/i.test(document.getElementById('status').textContent),
+    null, { timeout: 90000 });
+  assert.match(await page.textContent('#status'), /Done/);
+  assert.match(await page.locator('#panel-table').innerText(), /95 % σ squat/);
+  assert.ok(await page.isVisible('#pose-note'));
+  await page.selectOption('#pose', 'standing');
+  await page.waitForFunction(() => !fitting && !garmentBusy && !garmentAgain, null, { timeout: 90000 });
   await tab('settings');
   await page.fill('#length-relief', '100');
   await page.evaluate(() => localStorage.clear());
