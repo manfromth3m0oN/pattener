@@ -14,10 +14,14 @@ Everything also runs in the browser (WebAssembly, no server-side code).
 Every push to `main` deploys it to GitHub Pages:
 https://manfromth3m0on.github.io/pattener/
 
-It works on phones as well as desktops, with the same features:
-- **3D view:** on a narrow screen it stays pinned at the top while the garment tools scroll beneath it. Pinch to zoom, double-tap to reset, tap to add points.
-- **Measurement help:** tap a measurement's name for how to take it.
-- **Wide tables:** they scroll sideways within their card.
+The app is a design workspace:
+- **Top bar:** the project (name, New, Open, Save) and **Make pattern**.
+- **Left panel:** the **Body** (measurements, shape), the **Garment** (templates, curves, ease zones) and the latex **Sheets**.
+- **Middle:** the **3D** body with the drawing tools (Edge, Seam, Inside, Zone, Paint, Undo point, Delete) and the flat **Pattern** pieces side by side. Tick **Live** to remake the pattern after every change.
+- **Right panel:** the **Inspector** for the selected curve, the pattern **Settings**, and the **Report**: warnings, downloads, materials, assembly guide, piece and seam tables.
+- **Status bar:** progress, plus a warnings counter that opens them.
+
+It is dark, or light when the device is set to light mode. On a phone the same screens are chosen from a bottom tab bar: pinch to zoom the 3D view, double-tap to reset it, tap a measurement's name for how to take it.
 
 To run it locally:
 

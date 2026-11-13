@@ -194,6 +194,10 @@ function setPicking(mode) {
   $('g-inside').classList.toggle('active', mode === 'inside');
   $('g-zone').classList.toggle('active', mode === 'zone');
   $('g-paint').classList.toggle('active', mode === 'paint');
+  // Adding points to an edge or seam: light up that tool.
+  const kind = mode === 'add' ? design.curves[active]?.kind : null;
+  $('g-new-edge').classList.toggle('active', kind === 'edge');
+  $('g-new-seam').classList.toggle('active', kind === 'seam');
   if (viewer) $('viewer').classList.toggle('picking', !!mode);
 }
 
@@ -794,7 +798,7 @@ function show(output, extraFiles) {
   }));
 
   const dl = $('downloads');
-  dl.replaceChildren(document.createTextNode('Download: '));
+  dl.replaceChildren();
   extraFiles.forEach(([n, t, ty]) => dl.appendChild(fileLink(n, t, ty)));
   r.panels.forEach((p, i) => dl.appendChild(fileLink(p.file, output.panel_svgs[i], 'image/svg+xml')));
   if (output.pdf) dl.appendChild(fileLink('pattern.pdf', output.pdf, 'application/pdf'));
