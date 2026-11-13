@@ -2,223 +2,331 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark light">
   <title>latexpat: latex garment patterns</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<header>
-  <h1>latexpat</h1>
-  <p>Patterns for latex garments: from your measurements to printable, glue-ready pieces. Everything runs in your browser.</p>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-edge" viewBox="0 0 24 24"><path d="M4 16c3-6 13-6 16 0" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></symbol>
+    <symbol id="i-seam" viewBox="0 0 24 24"><path d="M12 3v18" stroke="currentColor" stroke-width="2" stroke-dasharray="3 2.5"/><path d="M8 6l-3 3 3 3M16 6l3 3-3 3" fill="none" stroke="currentColor" stroke-width="1.6"/></symbol>
+    <symbol id="i-inside" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="12" cy="12" r="2.6" fill="currentColor"/></symbol>
+    <symbol id="i-zone" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-dasharray="4 2.5"/><path d="M9 12h6M12 9v6" stroke="currentColor" stroke-width="1.8"/></symbol>
+    <symbol id="i-paint" viewBox="0 0 24 24"><path d="M5 19c0-3 2-4 3.5-4.5L17 6l2 2-8.5 8.5C10 18 8 20 5 19z" fill="currentColor"/></symbol>
+    <symbol id="i-undo" viewBox="0 0 24 24"><path d="M9 7L4 12l5 5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M4 12h10a6 6 0 010 12" fill="none" stroke="currentColor" stroke-width="2" transform="translate(0 -5)"/></symbol>
+    <symbol id="i-delete" viewBox="0 0 24 24"><path d="M6 7h12M10 7V5h4v2M8 7l1 12h6l1-12" fill="none" stroke="currentColor" stroke-width="1.8"/></symbol>
+    <symbol id="i-body" viewBox="0 0 24 24"><circle cx="12" cy="4.5" r="2.5" fill="currentColor"/><path d="M8 9h8l-1 6h-1.5l-.5 7h-2l-.5-7H9z" fill="currentColor"/></symbol>
+    <symbol id="i-garment" viewBox="0 0 24 24"><path d="M8 3l-5 3 2 5 2-1v11h10V10l2 1 2-5-5-3c-1 2-2.5 3-4 3S9 5 8 3z" fill="currentColor"/></symbol>
+    <symbol id="i-sheets" viewBox="0 0 24 24"><rect x="4" y="5" width="14" height="10" rx="1.5" fill="currentColor" opacity=".55"/><rect x="7" y="9" width="14" height="10" rx="1.5" fill="currentColor"/></symbol>
+    <symbol id="i-cube" viewBox="0 0 24 24"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z M12 12l8-4.5M12 12v9M12 12L4 7.5" fill="none" stroke="currentColor" stroke-width="1.7"/></symbol>
+    <symbol id="i-pattern" viewBox="0 0 24 24"><path d="M4 5h7l-1 14H4zM13 5h7v14h-6z" fill="none" stroke="currentColor" stroke-width="1.8"/></symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h4M12 17h8" stroke="currentColor" stroke-width="2"/><circle cx="16" cy="7" r="2.3" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="10" cy="17" r="2.3" fill="none" stroke="currentColor" stroke-width="1.8"/></symbol>
+    <symbol id="i-report" viewBox="0 0 24 24"><path d="M6 3h9l4 4v14H6z" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M9 11h7M9 15h7" stroke="currentColor" stroke-width="1.8"/></symbol>
+    <symbol id="i-inspect" viewBox="0 0 24 24"><path d="M4 20l4-1 11-11-3-3L5 16z" fill="none" stroke="currentColor" stroke-width="1.8"/></symbol>
+  </defs>
+</svg>
+
+<header class="topbar">
+  <div class="brand"><span class="logo"></span>latexpat</div>
   <div class="project-bar">
-    <label>Project <input type="text" id="project-name" value="Untitled"></label>
+    <input type="text" id="project-name" value="Untitled" aria-label="Project name">
     <button type="button" id="project-new">New</button>
-    <label class="file-button">Open… <input type="file" id="project-open" accept=".json"></label>
+    <label class="file-button">Open <input type="file" id="project-open" accept=".json"></label>
     <button type="button" id="project-save">Save</button>
     <span id="project-status" class="hint"></span>
   </div>
+  <div class="spacer"></div>
+  <button type="button" id="run" class="primary">Make<span class="long"> pattern</span></button>
 </header>
 
-<main>
-  <section>
-    <h2>1. Body</h2>
-    <div class="tabs" role="radiogroup">
-      <label><input type="radio" name="source" value="human" checked> Full body</label>
-      <label><input type="radio" name="source" value="measure"> Quick torso</label>
-      <label><input type="radio" name="source" value="upload"> Upload a mesh</label>
-    </div>
+<div class="workspace">
+  <!-- Left: what you are making. -->
+  <aside class="sidebar left" aria-label="Body, garment and sheets">
+    <nav class="tabbar" role="tablist">
+      <button type="button" role="tab" data-pane="body"><svg><use href="#i-body"/></svg>Body</button>
+      <button type="button" role="tab" data-pane="garment"><svg><use href="#i-garment"/></svg>Garment</button>
+      <button type="button" role="tab" data-pane="sheets"><svg><use href="#i-sheets"/></svg>Sheets</button>
+    </nav>
 
-    <div id="human-panel" class="body-layout">
-      <div class="body-inputs">
-        <div class="tabs" role="radiogroup" aria-label="Figure">
-          <label><input type="radio" name="figure" value="women" checked> Women's</label>
-          <label><input type="radio" name="figure" value="men"> Men's</label>
-        </div>
-        <p class="hint">Fill in what you have; the rest is estimated. Hover or tap a name for how to measure it.
-          Anything between the two figures can be set with the Body type slider below.</p>
-        <label>Units
-          <select id="units"><option value="cm">cm</option><option value="mm">mm</option><option value="in">inches</option></select>
-        </label>
-        <div id="measure-inputs" class="measure-grid"></div>
-        <p id="measure-hint" class="hint" hidden></p>
-        <h3>Shape</h3>
-        <p class="hint">A tape measure can't see these, so set them by eye.</p>
-        <div id="shape-inputs" class="shape-grid"></div>
-        <button type="button" id="fit-body" class="primary">Update body</button>
-        <span id="fit-status" role="status"></span>
+    <section class="pane" data-pane="body" aria-label="Body">
+      <div class="seg" role="radiogroup" aria-label="Body source">
+        <label><input type="radio" name="source" value="human" checked><span>Full body</span></label>
+        <label><input type="radio" name="source" value="measure"><span>Quick torso</span></label>
+        <label><input type="radio" name="source" value="upload"><span>Upload</span></label>
       </div>
-      <div class="body-view">
-        <canvas id="viewer" aria-label="3D view of the body"></canvas>
-        <p class="hint">Drag to turn, scroll or pinch to zoom, double-click or double-tap to reset. Orange lines show where each supplied girth is measured.</p>
-        <ul id="fit-warnings"></ul>
 
-        <div id="garment-tools">
-          <h3>Garment</h3>
-          <p class="hint">Draw on the body. <b>Edges</b> are necklines, hems, cuffs and leg openings; close each loop.
-            <b>Seams</b> split the garment into pieces that lie flat; their ends snap onto an edge or seam within 2 cm.
-            Curves pass smoothly through the points you click; drag a point of the selected curve to move it.
-            Then pick a point inside the garment.</p>
-          <div class="toolbar">
-            <button type="button" id="g-new-edge">New edge</button>
-            <button type="button" id="g-new-seam">New seam</button>
-            <button type="button" id="g-inside">Pick inside</button>
-            <button type="button" id="g-undo">Undo point</button>
-            <button type="button" id="g-delete">Delete curve</button>
-            <button type="button" id="g-zone">Add ease zone</button>
-            <span class="toolbar-group">
-              <button type="button" id="g-paint">Paint sheet</button>
-              <select id="g-paint-sheet" aria-label="Sheet to paint"></select>
-              <button type="button" id="g-paint-clear" title="Every piece back to the default sheet">Unpaint all</button>
-            </span>
-            <span class="toolbar-group">
-              <select id="g-template" aria-label="Template"></select>
-              <button type="button" id="g-example">Start from template</button>
-            </span>
-            <button type="button" id="g-clear">Clear</button>
-            <label class="check" title="By default a garment is symmetric: it is built on the right side of the body and mirrored, so matching pieces come out identical. Tick this for a one-sided design.">
-              <input type="checkbox" id="g-asym"> Asymmetric design</label>
-          </div>
-          <div id="g-active" class="toolbar" hidden>
-            <label>Name <input type="text" id="g-name"></label>
-            <label class="check"><input type="checkbox" id="g-closed"> Closed loop</label>
-            <label class="check"><input type="checkbox" id="g-mirror"> Mirror to other side</label>
-            <label id="g-seam-finish-wrap">Seam
-              <select id="g-seam-finish"><option value="glued">glued (lap)</option><option value="zip">zip</option></select>
-            </label>
-            <span id="g-edge-finish-wrap">
-              <label>Finish
-                <select id="g-edge-finish">
-                  <option value="">hem allowance (pattern setting)</option>
-                  <option value="raw">raw (cut on the line)</option>
-                  <option value="hem">folded hem</option>
-                  <option value="trim">trim strip</option>
-                </select>
-              </label>
-              <label id="g-finish-width-wrap">Width (mm) <input type="number" id="g-finish-width" value="15" step="1" min="1"></label>
-              <label id="g-finish-ease-wrap" title="The strip is cut shorter than the edge so it hugs the body">Trim length (% of edge)
-                <input type="number" id="g-finish-ease" value="90" step="1" min="50" max="100"></label>
-            </span>
-          </div>
-          <p id="g-template-note" class="hint"></p>
-          <ul id="g-curves" class="curve-list"></ul>
-          <div id="g-zones-wrap" hidden>
-            <h4>Ease zones</h4>
-            <p class="hint">A zone has its own ease within its radius, blending back to the rest towards the edge:
-              higher (e.g. 0.92) is looser, lower is tighter.</p>
-            <table id="g-zones"></table>
-          </div>
-          <div id="pressure-panel" hidden>
-            <label class="check"><input type="checkbox" id="show-pressure" checked> Show pressure on the body</label>
-            <div class="legend"><span>bridging</span><span class="bar"></span><span>40+ mmHg</span></div>
-            <p class="hint">How hard the latex presses on the body. Blue: it bridges over a hollow and won't touch the skin.
-              Red: it presses hard (15–20 mmHg is light compression; over 40 is very firm). Updated by Make pattern.
-              Red rings mark where a piece has to distort to lie flat: a dart or seam towards the ring (or a set-in sleeve, at an armpit) would help.</p>
-          </div>
-          <p id="g-status" role="status"></p>
-          <ul id="g-warnings"></ul>
+      <div id="human-panel">
+        <div class="seg" role="radiogroup" aria-label="Figure">
+          <label><input type="radio" name="figure" value="women" checked><span>Women's</span></label>
+          <label><input type="radio" name="figure" value="men"><span>Men's</span></label>
         </div>
-
+        <div class="group">
+          <div class="group-head"><h3>Measurements</h3>
+            <select id="units" aria-label="Units"><option value="cm">cm</option><option value="mm">mm</option><option value="in">in</option></select>
+          </div>
+          <p class="hint">Fill in what you have; the rest is estimated. Hover or tap a name for how to measure it.</p>
+          <div id="measure-inputs" class="measure-grid"></div>
+          <p id="measure-hint" class="hint" hidden></p>
+        </div>
+        <div class="group">
+          <h3>Shape</h3>
+          <p class="hint">Set by eye. Body type blends the women's and men's figures.</p>
+          <div id="shape-inputs" class="shape-grid"></div>
+        </div>
+        <div class="row">
+          <button type="button" id="fit-body" class="primary">Update body</button>
+          <span id="fit-status" role="status"></span>
+        </div>
+        <ul id="fit-warnings" class="warnings"></ul>
         <details>
-          <summary>Measurements of the body</summary>
+          <summary>Measurements of the fitted body</summary>
           <table id="fit-table"></table>
         </details>
         <div id="body-downloads"></div>
       </div>
-    </div>
 
-    <div id="measure-panel" hidden>
-      <p class="hint">A simple lofted torso: bottom to top, heights above the lowest level, all in millimetres. Front bias above 0.5 adds bust or belly projection.</p>
-      <table id="levels">
-        <thead><tr><th>Level</th><th>Height</th><th>Circumference</th><th>Depth ratio</th><th>Front bias</th><th></th></tr></thead>
-        <tbody></tbody>
-      </table>
-      <button type="button" id="add-level">Add level</button>
-      <label>Seams
-        <select id="style">
-          <option value="princess">Princess lines (6 panels)</option>
-          <option value="tube">Side seams only (2 panels)</option>
-        </select>
-      </label>
-    </div>
+      <div id="measure-panel" hidden>
+        <p class="hint">A simple lofted torso: bottom to top, heights above the lowest level, all in millimetres. Front bias above 0.5 adds bust or belly projection.</p>
+        <table id="levels">
+          <thead><tr><th>Level</th><th>Height</th><th>Circumference</th><th>Depth ratio</th><th>Front bias</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <button type="button" id="add-level">Add level</button>
+        <label>Seams
+          <select id="style">
+            <option value="princess">Princess lines (6 panels)</option>
+            <option value="tube">Side seams only (2 panels)</option>
+          </select>
+        </label>
+      </div>
 
-    <div id="upload-panel" hidden>
-      <label>Mesh (.obj) <input type="file" id="obj-file" accept=".obj"></label>
-      <label>Seams (.json) <input type="file" id="seams-file" accept=".json"></label>
-      <label>Scale to mm <input type="number" id="scale" value="1" step="any" min="0"></label>
-      <label>Up axis
-        <select id="up"><option value="0,1,0">Y</option><option value="0,0,1">Z</option><option value="1,0,0">X</option></select>
-      </label>
-    </div>
-  </section>
+      <div id="upload-panel" hidden>
+        <label>Mesh (.obj) <input type="file" id="obj-file" accept=".obj"></label>
+        <label>Seams (.json) <input type="file" id="seams-file" accept=".json"></label>
+        <label>Scale to mm <input type="number" id="scale" value="1" step="any" min="0"></label>
+        <label>Up axis
+          <select id="up"><option value="0,1,0">Y</option><option value="0,0,1">Z</option><option value="1,0,0">X</option></select>
+        </label>
+      </div>
+    </section>
 
-  <section>
-    <h2>2. Latex sheets</h2>
-    <p class="hint">The sheets you'll cut from. Each piece uses the default sheet unless you paint it another one on the body
-      (Paint sheet, under the garment tools). Leave Ease empty to use the ease below or the swatch calibration.</p>
-    <table id="sheets"></table>
-    <div class="toolbar">
-      <button type="button" id="sheet-add">Add sheet</button>
-      <label>Default sheet <select id="sheet-default"></select></label>
-    </div>
-  </section>
+    <section class="pane" data-pane="garment" aria-label="Garment">
+      <div class="group">
+        <h3>Start from a template</h3>
+        <div class="row">
+          <select id="g-template" aria-label="Template"></select>
+          <button type="button" id="g-example">Start</button>
+        </div>
+        <p id="g-template-note" class="hint"></p>
+      </div>
+      <div class="group">
+        <div class="group-head"><h3>Curves</h3>
+          <button type="button" id="g-clear" class="quiet">Clear all</button>
+        </div>
+        <p class="hint"><b>Edges</b> are necklines, hems, cuffs and leg openings; close each loop.
+          <b>Seams</b> split the garment into pieces that lie flat; their ends snap onto an edge or seam within 2 cm.
+          Pick the tool above the 3D view and click on the body; drag a point of the selected curve to move it.</p>
+        <ul id="g-curves" class="curve-list"></ul>
+        <label class="check" title="By default a garment is symmetric: it is built on the right side of the body and mirrored, so matching pieces come out identical. Tick this for a one-sided design.">
+          <input type="checkbox" id="g-asym"> Asymmetric design</label>
+      </div>
+      <div id="g-zones-wrap" class="group" hidden>
+        <h3>Ease zones</h3>
+        <p class="hint">A zone has its own ease within its radius, blending back to the rest towards the edge:
+          higher (e.g. 0.92) is looser, lower is tighter.</p>
+        <table id="g-zones"></table>
+      </div>
+      <p id="g-status" role="status"></p>
+      <ul id="g-warnings" class="warnings"></ul>
+    </section>
 
-  <section>
-    <h2>3. Pattern</h2>
-    <div class="grid">
-      <label>Ease <input type="number" id="ease" value="0.85" step="0.01" min="0.5" max="1"></label>
-      <label>Glue allowance (mm) <input type="number" id="allowance" value="6" step="1" min="0"></label>
-      <label>Allowance on
-        <select id="allowance-side"><option>left</option><option>right</option><option>both</option><option>none</option></select>
-      </label>
-      <label>Hem allowance (mm) <input type="number" id="hem" value="0" step="1" min="0"></label>
-      <label title="Strip on each side of a zip seam for gluing the zip tape">Zip allowance (mm) <input type="number" id="zip" value="10" step="1" min="0"></label>
-      <label title="Irons out small wiggles in the piece outlines, over about this distance; 0 keeps them exactly as flattened">Smooth outlines (mm) <input type="number" id="smooth" value="10" step="1" min="0"></label>
-      <label title="Smooths the body shape over about this distance before flattening, so hollows and bumps latex bridges (navel, collarbones) do not shape the pattern; 0 uses the body as it is">Smooth body (mm) <input type="number" id="smooth-body" value="15" step="1" min="0"></label>
-      <label>Notch spacing (mm) <input type="number" id="notch" value="50" step="5" min="0"></label>
-      <label title="Latex is usually reduced less along the body than around it; 30–50 % is typical.">Lengthwise reduction (% of around)
-        <input type="number" id="length-relief" value="100" step="5" min="0" max="100"></label>
-      <label title="Used for the pressure map unless a swatch calibration is given.">Latex thickness (mm)
-        <input type="number" id="thickness" value="0.40" step="0.05" min="0.05"></label>
-      <label>Heatmap
-        <select id="heatmap"><option value="">none</option><option value="max_stretch">max stretch</option><option value="area_stretch">area stretch</option></select>
-      </label>
-      <label>Sheet width (mm, optional) <input type="number" id="sheet-width" placeholder="e.g. 1000" min="0"></label>
-      <label title="A PDF with every piece at full size, tiled over home-printer pages">Printable PDF
-        <select id="paper"><option value="a4">A4</option><option value="letter">Letter</option><option value="">none</option></select>
-      </label>
-      <label class="check"><input type="checkbox" id="match" checked> Match seam lengths</label>
-    </div>
-    <details id="calib-details">
-      <summary>Swatch calibration (optional)</summary>
-      <p class="hint">A calibration file from <code>latexpat calibrate</code> sets the ease from your own stretch tests instead of the value above.</p>
-      <label>Calibration (.json) <input type="file" id="calib-file" accept=".json"></label>
-      <label>Sheet (name or thickness, e.g. 0.4mm) <input type="text" id="calib-sheet"></label>
-    </details>
-  </section>
+    <section class="pane" data-pane="sheets" aria-label="Latex sheets">
+      <div class="group">
+        <h3>Latex sheets</h3>
+        <p class="hint">The sheets you'll cut from. Each piece uses the default sheet unless you paint it another one
+          (Paint tool above the 3D view). Leave Ease empty to use the pattern's ease or the swatch calibration.</p>
+        <table id="sheets"></table>
+        <div class="row">
+          <button type="button" id="sheet-add">Add sheet</button>
+          <label class="inline">Default <select id="sheet-default"></select></label>
+        </div>
+      </div>
+    </section>
+  </aside>
 
-  <section>
-    <button type="button" id="run" class="primary">Make pattern</button>
-    <span id="status" role="status"></span>
-    <p id="run-note" class="hint" hidden>Draw a garment on the body first: edges, seams and a point inside.</p>
-  </section>
+  <!-- Middle: the two views. -->
+  <main class="views">
+    <section class="view view3d" data-pane="3d" aria-label="3D view">
+      <div class="view-head">
+        <div class="tools" role="toolbar" aria-label="Drawing tools">
+          <button type="button" id="g-new-edge" title="New edge: click points on the body"><svg><use href="#i-edge"/></svg><span>Edge</span></button>
+          <button type="button" id="g-new-seam" title="New seam: click points on the body"><svg><use href="#i-seam"/></svg><span>Seam</span></button>
+          <button type="button" id="g-inside" title="Pick a point inside the garment"><svg><use href="#i-inside"/></svg><span>Inside</span></button>
+          <button type="button" id="g-zone" title="Add an ease zone: click on the body"><svg><use href="#i-zone"/></svg><span>Zone</span></button>
+          <span class="tool-group">
+            <button type="button" id="g-paint" title="Paint a piece with a sheet: click on it"><svg><use href="#i-paint"/></svg><span>Paint</span></button>
+            <select id="g-paint-sheet" aria-label="Sheet to paint"></select>
+            <button type="button" id="g-paint-clear" class="quiet" title="Every piece back to the default sheet">Unpaint</button>
+          </span>
+          <span class="sep"></span>
+          <button type="button" id="g-undo" title="Remove the last point of the selected curve"><svg><use href="#i-undo"/></svg><span>Undo point</span></button>
+          <button type="button" id="g-delete" title="Delete the selected curve"><svg><use href="#i-delete"/></svg><span>Delete</span></button>
+        </div>
+      </div>
+      <div class="view-body">
+        <canvas id="viewer" aria-label="3D view of the body"></canvas>
+        <div class="view-hint">Drag to turn · scroll or pinch to zoom · double-click to reset</div>
+        <div id="pressure-panel" class="overlay" hidden>
+          <label class="check"><input type="checkbox" id="show-pressure" checked> Pressure</label>
+          <div class="legend"><span>bridging</span><span class="bar"></span><span>40+ mmHg</span></div>
+          <p class="hint">Blue: the latex bridges a hollow. Red: it presses hard (15–20 mmHg is light compression).
+            Red rings mark where a piece strains: a dart or seam towards the ring would help.</p>
+        </div>
+      </div>
+    </section>
 
-  <section id="results" hidden>
-    <h2>4. Your pattern</h2>
-    <ul id="warnings"></ul>
-    <div id="downloads"></div>
-    <h3>Panels</h3>
-    <table id="panel-table"></table>
-    <h3>Seams</h3>
-    <table id="seam-table"></table>
-    <div id="materials-out"></div>
-    <div id="assembly-out"></div>
-    <div id="trims-out"></div>
-    <div id="layout"></div>
-    <div id="pieces" class="pieces"></div>
-    <p class="hint">Print the PDF or the SVGs at 100 % and check the 50 mm square or scale bar. Mark notches with a pen; snipping latex starts tears.</p>
-  </section>
-</main>
+    <section class="view view2d" data-pane="pattern" aria-label="Flat pattern">
+      <div class="view-head">
+        <span class="view-title"><svg><use href="#i-pattern"/></svg>Pattern</span>
+        <div class="spacer"></div>
+        <label class="check" title="Make the pattern again after every change to the garment"><input type="checkbox" id="live"> Live</label>
+        <label class="inline" title="Size of the pieces">Zoom <input type="range" id="piece-zoom" min="160" max="900" value="320"></label>
+      </div>
+      <div class="view-body paper-bg">
+        <div id="pattern-empty" class="empty">
+          <p>The flat pieces appear here.</p>
+          <p class="hint">Draw a garment (or start from a template), then press <b>Make pattern</b>.</p>
+        </div>
+        <div id="pieces" class="pieces"></div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Right: details of what is selected, settings, and results. -->
+  <aside class="sidebar right" aria-label="Inspector, settings and report">
+    <nav class="tabbar" role="tablist">
+      <button type="button" role="tab" data-pane="inspector"><svg><use href="#i-inspect"/></svg>Inspector</button>
+      <button type="button" role="tab" data-pane="settings"><svg><use href="#i-settings"/></svg>Settings</button>
+      <button type="button" role="tab" data-pane="report"><svg><use href="#i-report"/></svg>Report</button>
+    </nav>
+
+    <section class="pane" data-pane="inspector" aria-label="Inspector">
+      <p id="inspector-empty" class="hint">Select a curve in the Garment list, or draw one, to edit it here.</p>
+      <div id="g-active" class="group" hidden>
+        <h3>Curve</h3>
+        <label>Name <input type="text" id="g-name"></label>
+        <label class="check"><input type="checkbox" id="g-closed"> Closed loop</label>
+        <label class="check"><input type="checkbox" id="g-mirror"> Mirror to other side</label>
+        <label id="g-seam-finish-wrap">Seam
+          <select id="g-seam-finish"><option value="glued">glued (lap)</option><option value="zip">zip</option></select>
+        </label>
+        <div id="g-edge-finish-wrap">
+          <label>Finish
+            <select id="g-edge-finish">
+              <option value="">hem allowance (pattern setting)</option>
+              <option value="raw">raw (cut on the line)</option>
+              <option value="hem">folded hem</option>
+              <option value="trim">trim strip</option>
+            </select>
+          </label>
+          <label id="g-finish-width-wrap">Width (mm) <input type="number" id="g-finish-width" value="15" step="1" min="1"></label>
+          <label id="g-finish-ease-wrap" title="The strip is cut shorter than the edge so it hugs the body">Trim length (% of edge)
+            <input type="number" id="g-finish-ease" value="90" step="1" min="50" max="100"></label>
+        </div>
+      </div>
+    </section>
+
+    <section class="pane" data-pane="settings" aria-label="Pattern settings">
+      <div class="group">
+        <h3>Fit</h3>
+        <div class="grid">
+          <label>Ease <input type="number" id="ease" value="0.85" step="0.01" min="0.5" max="1"></label>
+          <label title="Latex is usually reduced less along the body than around it; 30–50 % is typical.">Lengthwise (% of around)
+            <input type="number" id="length-relief" value="100" step="5" min="0" max="100"></label>
+          <label title="Used for the pressure map unless a swatch calibration is given.">Thickness (mm)
+            <input type="number" id="thickness" value="0.40" step="0.05" min="0.05"></label>
+          <label class="check"><input type="checkbox" id="match" checked> Match seam lengths</label>
+        </div>
+      </div>
+      <div class="group">
+        <h3>Construction</h3>
+        <div class="grid">
+          <label>Glue allowance (mm) <input type="number" id="allowance" value="6" step="1" min="0"></label>
+          <label>Allowance on
+            <select id="allowance-side"><option>left</option><option>right</option><option>both</option><option>none</option></select>
+          </label>
+          <label>Hem allowance (mm) <input type="number" id="hem" value="0" step="1" min="0"></label>
+          <label title="Strip on each side of a zip seam for gluing the zip tape">Zip allowance (mm) <input type="number" id="zip" value="10" step="1" min="0"></label>
+          <label>Notch spacing (mm) <input type="number" id="notch" value="50" step="5" min="0"></label>
+        </div>
+      </div>
+      <div class="group">
+        <h3>Shape clean-up</h3>
+        <div class="grid">
+          <label title="Irons out small wiggles in the piece outlines, over about this distance; 0 keeps them exactly as flattened">Smooth outlines (mm) <input type="number" id="smooth" value="10" step="1" min="0"></label>
+          <label title="Smooths the body shape over about this distance before flattening, so hollows and bumps latex bridges (navel, collarbones) do not shape the pattern; 0 uses the body as it is">Smooth body (mm) <input type="number" id="smooth-body" value="15" step="1" min="0"></label>
+        </div>
+      </div>
+      <div class="group">
+        <h3>Output</h3>
+        <div class="grid">
+          <label>Heatmap
+            <select id="heatmap"><option value="">none</option><option value="max_stretch">max stretch</option><option value="area_stretch">area stretch</option></select>
+          </label>
+          <label title="A PDF with every piece at full size, tiled over home-printer pages">Printable PDF
+            <select id="paper"><option value="a4">A4</option><option value="letter">Letter</option><option value="">none</option></select>
+          </label>
+          <label>Sheet width (mm) <input type="number" id="sheet-width" placeholder="optional" min="0"></label>
+        </div>
+      </div>
+      <details id="calib-details">
+        <summary>Swatch calibration (optional)</summary>
+        <p class="hint">A calibration file from <code>latexpat calibrate</code> sets the ease from your own stretch tests instead of the value above.</p>
+        <label>Calibration (.json) <input type="file" id="calib-file" accept=".json"></label>
+        <label>Sheet (name or thickness, e.g. 0.4mm) <input type="text" id="calib-sheet"></label>
+      </details>
+    </section>
+
+    <section class="pane" data-pane="report" aria-label="Report">
+      <p id="run-note" class="hint" hidden>Draw a garment on the body first: edges, seams and a point inside.</p>
+      <p id="report-empty" class="hint">Make the pattern to see warnings, downloads, the materials list and the assembly guide.</p>
+      <div id="results" hidden>
+        <ul id="warnings" class="warnings"></ul>
+        <h3>Download</h3>
+        <div id="downloads"></div>
+        <div id="materials-out"></div>
+        <div id="assembly-out"></div>
+        <h3>Pieces</h3>
+        <table id="panel-table"></table>
+        <h3>Seams</h3>
+        <table id="seam-table"></table>
+        <div id="trims-out"></div>
+        <div id="layout"></div>
+        <p class="hint">Print the PDF or the SVGs at 100 % and check the 50 mm square or scale bar. Mark notches with a pen; snipping latex starts tears.</p>
+      </div>
+    </section>
+  </aside>
+</div>
+
+<footer class="statusbar">
+  <span id="status" role="status">Ready</span>
+  <span class="spacer"></span>
+  <button type="button" id="status-warnings" class="quiet" hidden></button>
+</footer>
+
+<nav class="mobilebar" role="tablist" aria-label="Screens">
+  <button type="button" role="tab" data-pane="3d"><svg><use href="#i-cube"/></svg>3D</button>
+  <button type="button" role="tab" data-pane="pattern"><svg><use href="#i-pattern"/></svg>Pattern</button>
+  <button type="button" role="tab" data-pane="body"><svg><use href="#i-body"/></svg>Body</button>
+  <button type="button" role="tab" data-pane="garment"><svg><use href="#i-garment"/></svg>Garment</button>
+  <button type="button" role="tab" data-pane="settings"><svg><use href="#i-settings"/></svg>Settings</button>
+  <button type="button" role="tab" data-pane="report"><svg><use href="#i-report"/></svg>Report</button>
+</nav>
+
 <script src="viewer.js"></script>
 <script src="app.js"></script>
+<script src="ui.js"></script>
 </body>
 </html>

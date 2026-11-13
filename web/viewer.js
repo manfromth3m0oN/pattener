@@ -130,6 +130,15 @@ class Viewer {
     new ResizeObserver(() => this.draw()).observe(canvas);
   }
 
+  // The canvas's --view-bg colour as linear 0–1 RGB (light grey if unset).
+  static themeColor(canvas) {
+    const v = getComputedStyle(canvas).getPropertyValue('--view-bg').trim();
+    const m = /^#([0-9a-f]{6})$/i.exec(v);
+    if (!m) return [0.97, 0.97, 0.97];
+    const n = parseInt(m[1], 16);
+    return [(n >> 16) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
+  }
+
   resetView() { this.yaw = 0.5; this.pitch = 0.1; this.zoom = 1; }
 
   _program(vsrc, fsrc) {
@@ -298,7 +307,9 @@ class Viewer {
     const w = c.clientWidth * devicePixelRatio, h = c.clientHeight * devicePixelRatio;
     if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
     gl.viewport(0, 0, w, h);
-    gl.clearColor(0.97, 0.97, 0.97, 1);
+    // Background from the page theme (--view-bg), so it follows dark / light.
+    const bg = Viewer.themeColor(this.canvas);
+    gl.clearColor(bg[0], bg[1], bg[2], 1);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     if (!this.mesh) return;
     gl.enable(gl.DEPTH_TEST);

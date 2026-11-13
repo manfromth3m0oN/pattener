@@ -22,6 +22,10 @@ const done = (p) => p.waitForFunction(
   const errors = [];
   page.on('pageerror', (e) => errors.push(String(e)));
   await page.goto(url);
+  // Side panels are tabbed: open a pane before using what is on it.
+  const tab = (name) => page.click(`.tabbar button[data-pane="${name}"]`);
+  // Segmented choices: click the visible label of a radio button.
+  const choose = (pg, name, value) => pg.click(`label:has(input[name=${name}][value=${value}]) span`);
 
   // 0. Full body (the default): the example project fits without warnings.
   const fitted = () => page.waitForFunction(
@@ -53,6 +57,7 @@ const done = (p) => p.waitForFunction(
     () => /Ready|cannot|error/i.test(document.getElementById('g-status').textContent),
     null, { timeout: 60000 });
   // Templates: the cincher makes four pieces; then work from the top.
+  await tab('garment');
   await page.waitForFunction(() => document.querySelectorAll('#g-template option').length >= 4);
   await page.selectOption('#g-template', 'cincher');
   assert.match(await page.textContent('#g-template-note'), /back zip/);
@@ -130,6 +135,7 @@ const done = (p) => p.waitForFunction(
   await page.locator('#g-curves li', { hasText: /^side \(seam/ }).click();
   await page.selectOption('#g-seam-finish', 'zip');
   assert.match(await page.locator('#g-curves').innerText(), /side \(seam.*zip\)/);
+  await tab('settings');
   await page.fill('#length-relief', '40');
   await page.click('#run');
   await page.waitForFunction(
@@ -153,11 +159,14 @@ const done = (p) => p.waitForFunction(
   const pdfHref = await page.locator('#downloads a', { hasText: 'pattern.pdf' }).getAttribute('href');
   const pdfHead = await page.evaluate(async (u) => (await (await fetch(u)).text()).slice(0, 8), pdfHref);
   assert.equal(pdfHead, '%PDF-1.4');
+  await tab('settings');
   await page.fill('#length-relief', '100');
   await page.evaluate(() => localStorage.clear());
 
   // 1. Quick torso from the default measurements, with heatmap and sheet layout.
-  await page.check('input[name=source][value=measure]');
+  await tab('body');
+  await choose(page, 'source', 'measure');
+  await tab('settings');
   await page.selectOption('#heatmap', 'max_stretch');
   await page.fill('#sheet-width', '1000');
   await page.click('#run');
@@ -168,16 +177,18 @@ const done = (p) => p.waitForFunction(
   assert.equal(await page.locator('#layout img').count(), 1);
 
   // 2. Invalid measurements give a readable error.
+  await tab('body');
   await page.fill('#levels tbody tr:nth-child(2) td:nth-child(2) input', '900');
   await page.click('#run');
   await done(page);
   assert.match(await page.textContent('#status'), /bottom to top/);
 
   // 3. Uploaded mesh + seams with a swatch calibration.
-  await page.check('input[name=source][value=upload]');
+  await choose(page, 'source', 'upload');
   await page.setInputFiles('#obj-file', 'tests/data/cap.obj');
   await page.setInputFiles('#seams-file', 'tests/data/cap.ring.seams.json');
   await page.selectOption('#up', '0,0,1');
+  await tab('settings');
   await page.click('#calib-details summary');
   await page.setInputFiles('#calib-file', 'tests/data/swatches.json');
   await page.fill('#calib-sheet', '0.40mm black');
@@ -187,19 +198,21 @@ const done = (p) => p.waitForFunction(
 
   // 4. Men's figure: typical measurements, a clean fit, and a template that
   // builds on it.
-  await page.check('input[name=source][value=human]');
-  await page.check('input[name=figure][value=men]');
+  await tab('body');
+  await choose(page, 'source', 'human');
+  await choose(page, 'figure', 'men');
   await page.waitForFunction(() => /Fitted/.test(document.getElementById('fit-status').textContent), null, { timeout: 90000 });
   assert.equal(await page.inputValue('#s-body_type'), '1');
   assert.equal(await page.inputValue('#m-height'), '178');
   assert.equal(await page.locator('#fit-warnings li').count(), 0);
+  await tab('garment');
   await page.selectOption('#g-template', 'leggings');
   await page.click('#g-example');
   await page.waitForFunction(() => /2 flat pieces/.test(document.getElementById('g-status').textContent), null, { timeout: 90000 });
 
-  // 5. On a phone: nothing wider than the screen, buttons reachable below
-  // the pinned 3D view, tap-for-help, pinch to zoom, double-tap to reset,
-  // tap to add a point, and the pattern made.
+  // 5. On a phone: one screen at a time from the bottom bar; nothing wider
+  // than the screen, tap-for-help, pinch to zoom, double-tap to reset, tap
+  // to add a point, and the pattern made (which shows the Pattern screen).
   const phone = await browser.newContext({ ...devices['iPhone 13'] });
   const m = await phone.newPage();
   m.on('pageerror', (e) => errors.push(e.message));
@@ -209,12 +222,17 @@ const done = (p) => p.waitForFunction(
   await m.reload();
   await m.waitForFunction(() => /Fitted/.test(document.getElementById('fit-status').textContent), null, { timeout: 90000 });
   const fits = () => m.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
+  const screen = (name) => m.tap(`.mobilebar button[data-pane="${name}"]`);
   assert.ok(await fits(), 'page wider than the phone');
+  assert.equal(await m.evaluate(() => document.body.dataset.screen), '3d');
+  await screen('body');
   await m.tap('#measure-inputs label span >> text=Waist height');
   assert.match(await m.textContent('#measure-hint'), /Waist height: /);
   await m.waitForFunction(() => document.querySelectorAll('#g-template option').length >= 8);
+  await screen('garment');
   await m.tap('#g-example');
   await m.waitForFunction(() => /2 flat pieces/.test(document.getElementById('g-status').textContent), null, { timeout: 90000 });
+  await screen('3d');
   const vb = await m.locator('#viewer').boundingBox();
   const cx = vb.x + vb.width / 2, cy = vb.y + vb.height / 2;
   const zoom0 = await m.evaluate(() => viewer.zoom);
@@ -242,6 +260,8 @@ const done = (p) => p.waitForFunction(
   await m.tap('#run');
   await m.waitForFunction(() => /Done|error/i.test(document.getElementById('status').textContent), null, { timeout: 120000 });
   assert.match(await m.textContent('#status'), /Done .*2 panels/);
+  assert.equal(await m.evaluate(() => document.body.dataset.screen), 'pattern');
+  assert.equal(await m.locator('.piece img').count(), 2);
   assert.ok(await fits(), 'results wider than the phone');
   await phone.close();
 
