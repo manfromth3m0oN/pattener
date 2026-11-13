@@ -30,7 +30,7 @@ use latexpat_core::calibrate::{calibrate, Calibration};
 use latexpat_core::cut::cut_panels;
 use latexpat_core::garment::{build, material_plan, panel_faces, zones_on, GarmentDesign};
 use latexpat_core::glam::DVec3;
-use latexpat_core::human::{along_body, fit, BodyModel, HumanBody, Measurer};
+use latexpat_core::human::{along_body, fit, pose, BodyModel, HumanBody, Measurer};
 use latexpat_core::job::{self, JobOptions};
 use latexpat_core::materials::Sheet;
 use latexpat_core::obj::{parse_obj, write_obj};
@@ -65,6 +65,9 @@ enum Request {
     Human {
         #[serde(default)]
         body: BodySpec,
+        /// Show the body in this pose (an id from `human::POSES`).
+        #[serde(default)]
+        pose: Option<String>,
     },
     Garment {
         #[serde(default)]
@@ -77,6 +80,9 @@ enum Request {
         /// The project's latex sheets.
         #[serde(default)]
         materials: Vec<Sheet>,
+        /// Show the body (and check the pattern) in this pose.
+        #[serde(default)]
+        pose: Option<String>,
         #[serde(default)]
         options: JobOptions,
     },
@@ -102,6 +108,37 @@ fn fitted(spec: &BodySpec) -> Result<HumanBody, String> {
     let b = fit(model, measurer, &spec.measurements, &spec.shape).map_err(|e| e.to_string())?;
     FITTED.with(|c| *c.borrow_mut() = Some((key, b.clone())));
     Ok(b)
+}
+
+/// A chosen pose on a fitted body: its bone transforms and the posed body.
+struct Posing {
+    transforms: pose::Transforms,
+    body: Vec<DVec3>,
+}
+
+impl Posing {
+    /// Points on the standing body, moved into the pose.
+    fn points(
+        &self,
+        model: &BodyModel,
+        b: &HumanBody,
+        pts: &[DVec3],
+    ) -> Result<Vec<DVec3>, String> {
+        let w = pose::skin_points(model, b, pts).map_err(|e| e.to_string())?;
+        Ok(pose::pose_points(pts, &w, &self.transforms))
+    }
+}
+
+/// The pose with this id, unless it is missing or the standing pose.
+fn posing(model: &BodyModel, b: &HumanBody, id: Option<&str>) -> Result<Option<Posing>, String> {
+    let Some(id) = id.filter(|id| *id != "standing") else {
+        return Ok(None);
+    };
+    let p = pose::pose_by_id(id).ok_or_else(|| format!("unknown pose '{id}'"))?;
+    let transforms = pose::bone_transforms(model, b, p).map_err(|e| e.to_string())?;
+    let w = pose::body_weights(model).map_err(|e| e.to_string())?;
+    let body = pose::pose_points(b.mesh.positions(), &w, &transforms);
+    Ok(Some(Posing { transforms, body }))
 }
 
 fn flat3(points: impl Iterator<Item = DVec3>) -> Vec<f32> {
@@ -154,10 +191,20 @@ fn run(request: &str) -> Result<Value, String> {
             let out = job::run(&mesh, &seams, &options).map_err(|e| e.to_string())?;
             Ok(json!({ "ok": true, "output": out }))
         }
-        Request::Human { body } => {
-            let (model, measurer) = human();
-            let b =
-                fit(model, measurer, &body.measurements, &body.shape).map_err(|e| e.to_string())?;
+        Request::Human { body, pose } => {
+            let (model, _) = human();
+            let mut b = fitted(&body)?;
+            if let Some(posing) = posing(model, &b, pose.as_deref())? {
+                // Tape lines follow the pose too.
+                let tapes = b
+                    .tapes
+                    .iter()
+                    .map(|(k, pts)| Ok((*k, posing.points(model, &b, pts)?)))
+                    .collect::<Result<Vec<_>, String>>()?;
+                b.tapes = tapes;
+                b.mesh = latexpat_core::mesh::Mesh::new(posing.body, b.mesh.triangles().to_vec())
+                    .map_err(|e| e.to_string())?;
+            }
             // Flat arrays keep the response compact for the 3D viewer.
             let positions: Vec<f32> = b
                 .mesh
@@ -194,9 +241,17 @@ fn run(request: &str) -> Result<Value, String> {
             pattern,
             materials,
             options,
+            pose,
         } => {
             let b = fitted(&body)?;
             let g = build(&b.mesh, &design).map_err(|e| e.to_string())?;
+            // The cut body in the pose, if one is chosen.
+            let (model, _) = human();
+            let posing = posing(model, &b, pose.as_deref())?;
+            let shown: Vec<DVec3> = match &posing {
+                Some(p) => p.points(model, &b, g.body.positions())?,
+                None => g.body.positions().to_vec(),
+            };
             let garment_triangles: Vec<u32> = g
                 .body
                 .triangles()
@@ -209,7 +264,7 @@ fn run(request: &str) -> Result<Value, String> {
                 .curves
                 .iter()
                 .map(|c| {
-                    let pts = flat3(c.vertices.iter().map(|&v| g.body.positions()[v as usize]));
+                    let pts = flat3(c.vertices.iter().map(|&v| shown[v as usize]));
                     json!({ "name": c.name, "kind": c.kind, "closed": c.closed, "points": pts })
                 })
                 .collect();
@@ -262,6 +317,10 @@ fn run(request: &str) -> Result<Value, String> {
                     options.materials = plan.clone();
                     options.edges = g.edges.clone();
                     options.mirror = g.mirror.clone();
+                    if posing.is_some() {
+                        options.posed =
+                            Some(g.vertex_origin.iter().map(|&v| shown[v as usize]).collect());
+                    }
                     Some(job::run(m, &g.seams, &options).map_err(|e| e.to_string())?)
                 }
                 (None, true) => {
@@ -272,20 +331,27 @@ fn run(request: &str) -> Result<Value, String> {
             // Pressure on the cut body's vertices (0 off the garment).
             let pressure = output.as_ref().map(|o| {
                 let mut p = vec![0.0f32; g.body.positions().len()];
-                for (&v, &x) in g.vertex_origin.iter().zip(&o.fit.pressure_mmhg) {
+                let fit = o.posed_fit.as_ref().unwrap_or(&o.fit);
+                for (&v, &x) in g.vertex_origin.iter().zip(&fit.pressure_mmhg) {
                     p[v as usize] = x as f32;
                 }
                 p
             });
+            let centres: Vec<DVec3> = zones.iter().map(|z| z.center).collect();
+            let centres = match &posing {
+                Some(p) => p.points(model, &b, &centres)?,
+                None => centres,
+            };
             let zone_json: Vec<Value> = zones
                 .iter()
-                .map(|z| json!({ "center": [z.center.x, z.center.y, z.center.z], "radius_mm": z.radius_mm, "ease": z.ease }))
+                .zip(&centres)
+                .map(|(z, c)| json!({ "center": [c.x, c.y, c.z], "radius_mm": z.radius_mm, "ease": z.ease }))
                 .collect();
             let mut warnings = g.warnings.clone();
             warnings.append(&mut plan_warnings);
             Ok(json!({
                 "ok": true,
-                "positions": flat3(g.body.positions().iter().copied()),
+                "positions": flat3(shown.iter().copied()),
                 "triangles": g.body.triangles().iter().flatten().copied().collect::<Vec<u32>>(),
                 "garment_triangles": garment_triangles,
                 "curves": curves,

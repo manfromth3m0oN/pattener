@@ -185,6 +185,10 @@ struct FlattenArgs {
     /// pattern; 0 flattens it as given.
     #[arg(long, default_value_t = latexpat_core::flatten::DEFAULT_BODY_SMOOTHING_MM)]
     smooth_body: f64,
+    /// With --project: also check the pattern on the body in this pose
+    /// (arms-up, arms-forward, arms-out, squat, sitting, step).
+    #[arg(long, requires = "project")]
+    pose: Option<String>,
     /// Strip on each side of a zip seam for the zip tape (mm).
     #[arg(long, default_value_t = 10.0)]
     zip_allowance: f64,
@@ -422,86 +426,113 @@ fn flatten(args: FlattenArgs) -> Result<()> {
         bail!("--heatmap-range must be greater than 1");
     }
     let mut materials = None;
-    let (mesh, seams, source, up, along, zones, edges, mirror) = match (&args.project, &args.mesh) {
-        (Some(path), _) => {
-            let t =
-                fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-            let project: Project =
-                serde_json::from_str(&t).with_context(|| format!("parsing {}", path.display()))?;
-            let model = BodyModel::bundled();
-            let measurer = Measurer::new(&model)?;
-            let body = fit(
-                &model,
-                &measurer,
-                &project.body.measurements,
-                &project.body.shape,
-            )?;
-            let g = build(&body.mesh, &project.garment)?;
-            for w in &g.warnings {
-                eprintln!("warning: {w}");
-            }
-            // Sheets from the project's catalogue, by the design's assignments.
-            let (plan, plan_warnings) =
-                material_plan(&body.mesh, &g, &project.garment, &project.materials)?;
-            for w in &plan_warnings {
-                eprintln!("warning: {w}");
-            }
-            materials = plan;
-            let mesh = g.mesh.with_context(|| {
-                "the project's garment has no area yet: draw its edges and pick a point inside"
-            })?;
-            // Along the body: from the skeleton, at each triangle's centre.
-            let centres: Vec<DVec3> = mesh
-                .triangles()
-                .iter()
-                .map(|t| {
-                    t.iter()
-                        .map(|&i| mesh.positions()[i as usize])
-                        .sum::<DVec3>()
-                        / 3.0
-                })
-                .collect();
-            let along = along_body(&body.joints, &centres)?;
-            let zones = zones_on(&body.mesh, &project.garment)?;
-            // The body model is Y-up.
-            (
-                mesh,
-                g.seams,
-                path.display().to_string(),
-                DVec3::Y,
-                Some(along),
-                zones,
-                g.edges,
-                g.mirror,
-            )
-        }
-        (None, Some(path)) => {
-            let text =
-                fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-            let mut mesh =
-                parse_obj(&text).with_context(|| format!("loading {}", path.display()))?;
-            mesh.scale(args.scale);
-            let seams: SeamSet = match &args.seams {
-                Some(p) => {
-                    let t = fs::read_to_string(p)
-                        .with_context(|| format!("reading {}", p.display()))?;
-                    serde_json::from_str(&t).with_context(|| format!("parsing {}", p.display()))?
+    let (mesh, seams, source, up, along, zones, edges, mirror, posed) =
+        match (&args.project, &args.mesh) {
+            (Some(path), _) => {
+                let t = fs::read_to_string(path)
+                    .with_context(|| format!("reading {}", path.display()))?;
+                let project: Project = serde_json::from_str(&t)
+                    .with_context(|| format!("parsing {}", path.display()))?;
+                let model = BodyModel::bundled();
+                let measurer = Measurer::new(&model)?;
+                let body = fit(
+                    &model,
+                    &measurer,
+                    &project.body.measurements,
+                    &project.body.shape,
+                )?;
+                let g = build(&body.mesh, &project.garment)?;
+                for w in &g.warnings {
+                    eprintln!("warning: {w}");
                 }
-                None => SeamSet::default(),
-            };
-            (
-                mesh,
-                seams,
-                path.display().to_string(),
-                args.up.vec(),
-                None,
-                Vec::new(),
-                Vec::new(),
-                None,
-            )
-        }
-        (None, None) => unreachable!("clap requires a mesh or a project"),
-    };
+                // Sheets from the project's catalogue, by the design's assignments.
+                let (plan, plan_warnings) =
+                    material_plan(&body.mesh, &g, &project.garment, &project.materials)?;
+                for w in &plan_warnings {
+                    eprintln!("warning: {w}");
+                }
+                materials = plan;
+                let mesh = g.mesh.with_context(|| {
+                    "the project's garment has no area yet: draw its edges and pick a point inside"
+                })?;
+                // Along the body: from the skeleton, at each triangle's centre.
+                let centres: Vec<DVec3> = mesh
+                    .triangles()
+                    .iter()
+                    .map(|t| {
+                        t.iter()
+                            .map(|&i| mesh.positions()[i as usize])
+                            .sum::<DVec3>()
+                            / 3.0
+                    })
+                    .collect();
+                let along = along_body(&body.joints, &centres)?;
+                let zones = zones_on(&body.mesh, &project.garment)?;
+                // Also check the pattern in another pose.
+                let posed = match args.pose.as_deref().filter(|p| *p != "standing") {
+                    Some(id) => {
+                        let pose =
+                            latexpat_core::human::pose::pose_by_id(id).with_context(|| {
+                                let ids: Vec<&str> =
+                                    latexpat_core::human::POSES.iter().map(|p| p.id).collect();
+                                format!("unknown pose '{id}'; poses: {}", ids.join(", "))
+                            })?;
+                        let w = latexpat_core::human::pose::skin_points(
+                            &model,
+                            &body,
+                            mesh.positions(),
+                        )?;
+                        let t = latexpat_core::human::pose::bone_transforms(&model, &body, pose)?;
+                        Some(latexpat_core::human::pose::pose_points(
+                            mesh.positions(),
+                            &w,
+                            &t,
+                        ))
+                    }
+                    None => None,
+                };
+                // The body model is Y-up.
+                (
+                    mesh,
+                    g.seams,
+                    path.display().to_string(),
+                    DVec3::Y,
+                    Some(along),
+                    zones,
+                    g.edges,
+                    g.mirror,
+                    posed,
+                )
+            }
+            (None, Some(path)) => {
+                let text = fs::read_to_string(path)
+                    .with_context(|| format!("reading {}", path.display()))?;
+                let mut mesh =
+                    parse_obj(&text).with_context(|| format!("loading {}", path.display()))?;
+                mesh.scale(args.scale);
+                let seams: SeamSet = match &args.seams {
+                    Some(p) => {
+                        let t = fs::read_to_string(p)
+                            .with_context(|| format!("reading {}", p.display()))?;
+                        serde_json::from_str(&t)
+                            .with_context(|| format!("parsing {}", p.display()))?
+                    }
+                    None => SeamSet::default(),
+                };
+                (
+                    mesh,
+                    seams,
+                    path.display().to_string(),
+                    args.up.vec(),
+                    None,
+                    Vec::new(),
+                    Vec::new(),
+                    None,
+                    None,
+                )
+            }
+            (None, None) => unreachable!("clap requires a mesh or a project"),
+        };
 
     let ease = match &args.calibration {
         None => EaseSpec::Uniform(args.ease.unwrap_or(0.85)),
@@ -568,6 +599,7 @@ fn flatten(args: FlattenArgs) -> Result<()> {
         }),
         edges,
         mirror,
+        posed,
         outline_smoothing_mm: args.smooth_outline,
         body_smoothing_mm: args.smooth_body,
         print: args.pdf.map(|p| PrintOptions {
@@ -674,6 +706,20 @@ fn write_job(dir: &Path, mesh: &str, scale: f64, out: &JobOutput) -> Result<()> 
             u.pieces,
             u.file
         );
+    }
+    if r.panels.iter().any(|p| p.posed_p95_stretch.is_some()) {
+        println!();
+        println!("{:<10} {:>14} {:>14}", "in pose", "p95 σ", "p95 mmHg");
+        for p in &r.panels {
+            println!(
+                "{:<10} {:>6.3} → {:<6.3} {:>6.1} → {:<6.1}",
+                p.index,
+                p.p95_stretch,
+                p.posed_p95_stretch.unwrap_or(f64::NAN),
+                p.p95_pressure_mmhg,
+                p.posed_p95_pressure_mmhg.unwrap_or(f64::NAN)
+            );
+        }
     }
     for (k, (t, svg)) in r.trims.iter().zip(&out.trim_svgs).enumerate() {
         if k == 0 {

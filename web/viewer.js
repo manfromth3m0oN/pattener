@@ -13,7 +13,8 @@ class Viewer {
     this.overlay = null;
     this.lines = [];
     this.marks = null;
-    this.color = [0.82, 0.78, 0.74];
+    // Dress-form calico.
+    this.color = [0.86, 0.83, 0.77];
     this.overlayColor = [0.16, 0.16, 0.18];
     this.resetView();
 
@@ -26,8 +27,11 @@ class Viewer {
       uniform vec3 color; uniform float lit; uniform float useCol; uniform vec3 light; in vec3 n; in vec3 c; out vec4 o;
       void main() {
         vec3 l = light;
-        float d = lit > 0.5 ? 0.45 + 0.55 * max(dot(normalize(n), l), 0.0) : 1.0;
-        o = vec4(mix(color, c, useCol) * d, 1.0);
+        vec3 nn = normalize(n);
+        float d = lit > 0.5 ? 0.42 + 0.55 * max(dot(nn, l), 0.0) : 1.0;
+        // A soft rim light outlines the form against the background.
+        float rim = lit > 0.5 ? 0.18 * pow(1.0 - abs(nn.z), 3.0) : 0.0;
+        o = vec4(mix(color, c, useCol) * d + rim, 1.0);
       }`;
     this.prog = this._program(vs, fs);
     this.loc = {

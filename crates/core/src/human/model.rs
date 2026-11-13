@@ -36,6 +36,29 @@ pub struct BodyModel {
     pub joint_names: Vec<String>,
     pub targets: Vec<Target>,
     target_index: HashMap<String, usize>,
+    /// Skeleton and skinning weights, if the file has them (see
+    /// [`crate::human::pose`]).
+    pub skin: Option<Skin>,
+}
+
+/// One bone of the posing skeleton.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Bone {
+    pub name: String,
+    /// Parent bone (bones are listed parents first).
+    pub parent: Option<usize>,
+    /// The landmark joint it turns about (index into
+    /// [`BodyModel::joint_names`]).
+    pub joint: usize,
+}
+
+/// Skeleton and per-vertex bone weights (linear blend skinning).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Skin {
+    pub bones: Vec<Bone>,
+    /// Per body vertex: up to four (bone, weight) pairs, weights summing
+    /// to 1.
+    pub weights: Vec<Vec<(u8, f32)>>,
 }
 
 /// Vertex positions of one morphed body.
@@ -133,6 +156,43 @@ impl BodyModel {
                 deltas,
             });
         }
+        // Optional skinning section.
+        let skin = if r.at < data.len() {
+            if r.take(4)? != b"SKIN" {
+                return Err(Error::Body("unknown section in body model".into()));
+            }
+            let n_bones = r.u8()? as usize;
+            let mut bones = Vec::with_capacity(n_bones);
+            for b in 0..n_bones {
+                let name = r.name()?;
+                let parent = r.u8()? as i8;
+                let joint = r.u8()? as usize;
+                if joint >= n_joints || (parent >= 0 && parent as usize >= b) {
+                    return Err(Error::Body("bad bone in body model".into()));
+                }
+                bones.push(Bone {
+                    name,
+                    parent: (parent >= 0).then_some(parent as usize),
+                    joint,
+                });
+            }
+            let mut weights = Vec::with_capacity(n_body);
+            for _ in 0..n_body {
+                let count = r.u8()? as usize;
+                let mut w = Vec::with_capacity(count);
+                for _ in 0..count {
+                    let (b, x) = (r.u8()?, r.u8()?);
+                    if b as usize >= n_bones {
+                        return Err(Error::Body("bad bone weight in body model".into()));
+                    }
+                    w.push((b, x as f32 / 255.0));
+                }
+                weights.push(w);
+            }
+            Some(Skin { bones, weights })
+        } else {
+            None
+        };
         Ok(Self {
             base,
             n_body,
@@ -140,6 +200,7 @@ impl BodyModel {
             joint_names,
             targets,
             target_index,
+            skin,
         })
     }
 

@@ -42,6 +42,28 @@ with the tape positions on it. Body type, muscle, cup, belly and buttocks
 are set by eye. Projects (name, measurements, shape, units) save to a
 `.latexpat.json` file and autosave in the browser.
 
+**Mannequin.** The body is shown as a dressmaker's mannequin: the head
+becomes a smooth form, and the nipples and genitals are smoothed away
+(`human::mannequin`). The rest of the body, and so the garment geometry,
+is unchanged. Tick **Realistic detail** for the full model.
+
+**Poses.** The **Pose** picker above the 3D view bends the body and the
+garment into a pose: arms up, reaching forward, arms out, squat, sitting
+or a walking step. Patterns are always drafted standing. Make pattern then
+also reports each piece's stretch and pressure in the chosen pose (the
+pressure map on the body shows the pose too), so you can see where a
+garment pulls when moving. On the command line, `flatten --project ...
+--pose squat` does the same.
+
+How the posing works (`human::pose`):
+- **Skeleton:** the body model carries MakeHuman's rig (CC0), folded into 21 bones that turn about its landmark joints.
+- **Poses as aims:** each pose says which way limbs point, so it fits any body. Feet can keep their standing orientation.
+- **Skinning:** vertices follow their bones by dual quaternion skinning. The weights are spread over a few centimetres of skin so bends don't concentrate in a few triangles.
+- **Garment points:** points of the cut garment take the weights of the body surface under them.
+
+Near the armpits and groin the posed figures run high: the model's skin
+can't slide over a joint the way real skin does.
+
 **Women's or men's figure.** The body model blends a feminine and a
 masculine base shape. Pick **Women's** or **Men's** to start from that
 figure, with typical measurements if you haven't entered your own. The
@@ -177,9 +199,11 @@ Above 10 %, the report says so, and the web app marks the spot on the body
 with a red ring. The fix is a dart or seam from the nearest edge towards
 the ring, or a set-in sleeve at an armpit.
 
-On the templates, the cut-on top is marked at the armpits. The set-in and
-raglan tops are marked at the bust: they need darts or princess seams
-there. The cincher has no marks.
+On the templates (mannequin body), the cut-on top is marked at the
+armpits, where set-in sleeves would help. So are the princess top's side
+fronts and the catsuit's fronts. The set-in and raglan tops and the cincher
+are not marked. With **Realistic detail** the nipples also push the
+set-in and raglan fronts over the line at the bust.
 
 ### Construction and printing
 

@@ -52,6 +52,10 @@ pub struct ShapeOptions {
     pub belly: f64,
     /// −1 (flat) to 1 (full).
     pub buttocks: f64,
+    /// Keep the body's anatomical detail (face, nipples, genitals) instead
+    /// of smoothing it away like a dressmaker's mannequin (see
+    /// [`mannequin`](crate::human::mannequin)).
+    pub realistic: bool,
 }
 
 impl Default for ShapeOptions {
@@ -62,6 +66,7 @@ impl Default for ShapeOptions {
             cup: 0.0,
             belly: 0.0,
             buttocks: 0.0,
+            realistic: false,
         }
     }
 }
@@ -299,7 +304,18 @@ pub fn fit(
     }
 
     let shape = problem.shape(&p);
-    let mesh = Mesh::new(shape.body(model).to_vec(), model.triangles.clone())?;
+    let joints: Vec<(String, DVec3)> = model
+        .joint_names
+        .iter()
+        .enumerate()
+        .map(|(j, name)| (name.clone(), shape.joint(model, j)))
+        .collect();
+    let body = if options.realistic {
+        shape.body(model).to_vec()
+    } else {
+        super::mannequin::mannequin(shape.body(model), &model.triangles, &joints)
+    };
+    let mesh = Mesh::new(body, model.triangles.clone())?;
     let measured = measurer
         .measure_all(model, &shape)?
         .into_iter()
@@ -312,12 +328,6 @@ pub fn fit(
     let tapes = MeasureKind::ALL
         .iter()
         .filter_map(|&k| Some((k, measurer.tape(model, &shape, k)?)))
-        .collect();
-    let joints = model
-        .joint_names
-        .iter()
-        .enumerate()
-        .map(|(j, name)| (name.clone(), shape.joint(model, j)))
         .collect();
     Ok(HumanBody {
         mesh,

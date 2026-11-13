@@ -1846,7 +1846,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn darts_open_into_wedges_and_strain_hints_point_at_the_bust() {
+    fn darts_open_into_wedges_and_strain_hints_point_at_the_armpit() {
         use super::examples::{cincher, top_set_in};
         use crate::job::{run, JobOptions};
         use crate::seams::SeamFinish;
@@ -1868,25 +1868,27 @@ pub(crate) mod tests {
         // The cincher lies flat: no hints.
         let (_, out) = job(&cincher(mesh, tapes));
         assert!(out.report.panels.iter().all(|p| p.strain_hint.is_none()));
-        // The set-in top's front strains at the bust.
-        let plain = top_set_in(&fitted);
-        let (_, out) = job(&plain);
-        let front = &out.report.panels[0];
-        let hint = front.strain_hint.expect("a hint on the front");
-        let bust = tapes.iter().find(|t| t.0 == MeasureKind::Bust).unwrap();
-        let apex = bust
-            .1
+        // The cut-on top strains at the armpits (where set-in sleeves would
+        // help): its hint is there.
+        let (_, out) = job(&super::examples::top_finished(mesh, tapes));
+        let hint = out.report.panels[0]
+            .strain_hint
+            .expect("a hint on the front");
+        let shoulder = fitted
+            .joints
             .iter()
-            .copied()
-            .max_by(|a, b| a.z.total_cmp(&b.z))
-            .unwrap();
+            .find(|j| j.0 == "l-shoulder")
+            .unwrap()
+            .1;
         assert!(
-            (hint[1] - apex.y).abs() < 80.0 && hint[2] > 100.0,
-            "hint {hint:?}, bust apex {apex}"
+            (hint[0].abs() - shoulder.x).abs() < 60.0 && (hint[1] - shoulder.y).abs() < 120.0,
+            "hint {hint:?}, shoulder {shoulder}"
         );
+        let plain = top_set_in(&fitted);
+        let bust = tapes.iter().find(|t| t.0 == MeasureKind::Bust).unwrap();
         // A side bust dart: from the side seam to just short of the bust
-        // point. It stays one front piece, opens into a wedge, and eases
-        // the strain there.
+        // point. It stays one front piece and opens into a wedge whose sides
+        // match.
         let side = bust
             .1
             .iter()
@@ -1922,7 +1924,42 @@ pub(crate) mod tests {
             dart.left_panel, dart.right_panel,
             "a dart joins a piece to itself"
         );
-        assert!(out2.report.panels[0].strain_spread < front.strain_spread);
+        // Its two sides are cut to the same length, so they glue together.
+        assert!(
+            dart.left_length_mm > 20.0 && dart.mismatch_mm.abs() < 2.0,
+            "{dart:?}"
+        );
+    }
+
+    #[test]
+    fn a_pattern_is_checked_in_another_pose() {
+        use super::examples::top_set_in;
+        use crate::human::pose::{bone_transforms, pose_by_id, pose_points, skin_points};
+        use crate::job::{run, JobOptions};
+        let model = test_model();
+        let fitted = fitted();
+        let g = build(&fitted.mesh, &top_set_in(&fitted)).unwrap();
+        let gm = g.mesh.as_ref().unwrap();
+        let weights = skin_points(&model, &fitted, gm.positions()).unwrap();
+        let t = bone_transforms(&model, &fitted, pose_by_id("arms-up").unwrap()).unwrap();
+        let posed = pose_points(gm.positions(), &weights, &t);
+        let opts = JobOptions {
+            mirror: g.mirror.clone(),
+            length_relief: 0.4,
+            posed: Some(posed),
+            ..Default::default()
+        };
+        let out = run(gm, &g.seams, &opts).unwrap();
+        let fit = out.posed_fit.as_ref().expect("posed fit");
+        assert_eq!(fit.pressure_mmhg.len(), gm.positions().len());
+        // Raising the arms stretches every piece, the sleeves (at the
+        // armpit) most; the body pieces stay well within what latex takes.
+        let r = &out.report.panels;
+        for p in r {
+            assert!(p.posed_p95_stretch.unwrap() > p.p95_stretch, "{}", p.index);
+        }
+        assert!(r[2].posed_p95_stretch.unwrap() > r[0].posed_p95_stretch.unwrap());
+        assert!(r[0].posed_p95_stretch.unwrap() < 2.5 && r[1].posed_p95_stretch.unwrap() < 2.5);
     }
 
     #[test]

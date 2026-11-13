@@ -94,6 +94,11 @@ pub struct JobOptions {
     /// come out as exact mirror images.
     #[cfg_attr(feature = "serde", serde(skip))]
     pub mirror: Option<Vec<u32>>,
+    /// The mesh's vertices in another pose (same order), e.g. from
+    /// [`human::pose`](crate::human::pose): the pattern is still drafted on
+    /// `mesh`, then its stretch and pressure are also evaluated in this pose.
+    #[cfg_attr(feature = "serde", serde(skip))]
+    pub posed: Option<Vec<DVec3>>,
 }
 
 impl Default for JobOptions {
@@ -118,6 +123,7 @@ impl Default for JobOptions {
             outline_smoothing_mm: crate::flatten::DEFAULT_OUTLINE_SMOOTHING_MM,
             body_smoothing_mm: crate::flatten::DEFAULT_BODY_SMOOTHING_MM,
             mirror: None,
+            posed: None,
         }
     }
 }
@@ -141,6 +147,12 @@ pub struct PanelReport {
     /// body (mesh coordinates, mm) a dart or seam should run towards.
     #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     pub strain_hint: Option<[f64; 3]>,
+    /// With [`JobOptions::posed`]: the piece's 95th-percentile stretch and
+    /// pressure in that pose.
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+    pub posed_p95_stretch: Option<f64>,
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+    pub posed_p95_pressure_mmhg: Option<f64>,
     pub sheet: Option<String>,
     pub ease: f64,
     pub seams: Vec<String>,
@@ -232,6 +244,8 @@ pub struct JobOutput {
     pub warnings: Vec<String>,
     /// Pressure and bridging map on the input mesh.
     pub fit: FitMap,
+    /// The same in the pose of [`JobOptions::posed`], on the posed mesh.
+    pub posed_fit: Option<FitMap>,
 }
 
 /// Run a complete pattern job.
@@ -354,6 +368,28 @@ pub fn run(mesh: &Mesh, seams: &SeamSet, opts: &JobOptions) -> Result<JobOutput>
     };
     let garment = flatten_garment(mesh, seams, &fopts)?;
     let fit = pressure_map(mesh, &garment, &pressure_k);
+    // The same pattern on the body in another pose: the flat pieces are
+    // unchanged; their 3D positions follow the pose.
+    let posed = match &opts.posed {
+        Some(p) if p.len() == mesh.positions().len() => {
+            let posed_mesh = Mesh::new(p.clone(), mesh.triangles().to_vec())?;
+            let mut posed_garment = garment.clone();
+            for fp in &mut posed_garment.panels {
+                for (q, &o) in fp.panel.positions.iter_mut().zip(&fp.panel.vertex_origin) {
+                    *q = p[o as usize];
+                }
+                fp.strain = crate::strain::measure(&fp.panel, &fp.uv);
+            }
+            let posed_fit = pressure_map(&posed_mesh, &posed_garment, &pressure_k);
+            Some((posed_garment, posed_fit))
+        }
+        Some(_) => {
+            return Err(Error::Body(
+                "the posed positions do not match the mesh".into(),
+            ))
+        }
+        None => None,
+    };
     let pieces = build_pattern(&garment, seams, &opts.pattern, &opts.edges);
     let trims = trim_strips(&garment, &opts.edges);
 
@@ -465,6 +501,8 @@ pub fn run(mesh: &Mesh, seams: &SeamSet, opts: &JobOptions) -> Result<JobOutput>
             index: i,
             file: format!("panel_{i:02}.svg"),
             mirror_of: garment.mirrored[i],
+            posed_p95_stretch: posed.as_ref().map(|(g, _)| g.panels[i].strain.p95_stretch),
+            posed_p95_pressure_mmhg: posed.as_ref().map(|(_, f)| f.panels[i].p95_pressure_mmhg),
             strain_spread: spreads[i],
             strain_hint: hints[i],
             sheet: panel_sheets[i].1.clone(),
@@ -660,6 +698,7 @@ pub fn run(mesh: &Mesh, seams: &SeamSet, opts: &JobOptions) -> Result<JobOutput>
         pdf,
         warnings,
         fit,
+        posed_fit: posed.map(|(_, f)| f),
     })
 }
 

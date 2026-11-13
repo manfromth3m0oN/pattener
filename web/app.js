@@ -89,6 +89,7 @@ function readBody() {
     if (v !== '') measurements[key] = Number(v) * UNIT_MM[units];
   }
   const shape = Object.fromEntries(SHAPES.map(([k]) => [k, Number($(`s-${k}`).value)]));
+  if ($('s-realistic').checked) shape.realistic = true;
   return { measurements, shape };
 }
 function writeBody(body) {
@@ -97,6 +98,7 @@ function writeBody(body) {
     $(`m-${key}`).value = mm === undefined ? '' : +(mm / UNIT_MM[units]).toFixed(units === 'mm' ? 0 : 1);
   }
   for (const [k] of SHAPES) $(`s-${k}`).value = body.shape?.[k] ?? 0;
+  $('s-realistic').checked = !!body.shape?.realistic;
   if (typeof syncFigure === 'function') syncFigure();
 }
 $('units').onchange = () => {
@@ -128,7 +130,7 @@ async function fitBody() {
   $('fit-body').disabled = true;
   try {
     const body = readBody();
-    const r = await call({ command: 'human', body });
+    const r = await call({ command: 'human', body, pose: $('pose').value });
     if (!r.ok) throw new Error(r.error);
     const requested = new Set(Object.keys(body.measurements));
     baseMesh = { positions: new Float32Array(r.positions), triangles: new Uint32Array(r.triangles) };
@@ -305,7 +307,7 @@ async function refreshGarment() {
         $('g-warnings').replaceChildren();
         continue;
       }
-      const r = await call({ command: 'garment', body: readBody(), design, materials });
+      const r = await call({ command: 'garment', body: readBody(), design, materials, pose: $('pose').value });
       if (!r.ok) throw new Error(r.error);
       const pieces = (r.pieces || []).filter((p) => p.color).map((p) => ({
         triangles: new Uint32Array(p.triangles), color: hexToRgb(p.color),
@@ -563,6 +565,14 @@ function showFit() {
   viewer.setMesh(positions, triangles, garment, colors);
 }
 $('show-pressure').onchange = showFit;
+// Another pose: show the body and garment in it; the pressure map is for
+// the old pose until the pattern is made again.
+$('pose').onchange = () => {
+  lastFit = null;
+  $('pressure-panel').hidden = true;
+  fitBody();
+};
+$('s-realistic').onchange = () => { saveLocal(); fitBody(); };
 $('g-undo').onclick = () => {
   const c = design.curves[active];
   if (c && c.points.length) { c.points.pop(); changed(); }
@@ -806,9 +816,15 @@ function show(output, extraFiles) {
   dl.appendChild(fileLink('report.json', JSON.stringify(r, null, 2), 'application/json'));
 
   const pairing = (p) => (p.mirror_of == null ? '' : p.mirror_of === p.index ? ' (symmetric)' : ` (mirror of ${p.mirror_of})`);
-  table($('panel-table'), ['panel', 'ease', 'min σ', '95 % under', 'max σ', 'slack', 'mmHg', '95 % under', 'bridging', 'cut size (mm)', 'seams'],
+  // In another pose: the same pattern's stretch and pressure there.
+  const posed = r.panels.some((p) => p.posed_p95_stretch != null);
+  $('pose-note').hidden = !posed;
+  const poseName = $('pose').selectedOptions[0].textContent.toLowerCase();
+  table($('panel-table'), ['panel', 'ease', 'min σ', '95 % under', 'max σ', 'slack', 'mmHg', '95 % under', 'bridging',
+    ...(posed ? [`95 % σ ${poseName}`, `95 % mmHg ${poseName}`] : []), 'cut size (mm)', 'seams'],
     r.panels.map((p) => [`${p.index}${pairing(p)}`, f(p.ease, 3), f(p.min_stretch, 3), f(p.p95_stretch, 3), f(p.max_stretch, 3),
       `${f(100 * p.slack_fraction, 0)} %`, f(p.mean_pressure_mmhg, 1), f(p.p95_pressure_mmhg, 1), `${f(100 * p.bridging_fraction, 0)} %`,
+      ...(posed ? [f(p.posed_p95_stretch, 3), f(p.posed_p95_pressure_mmhg, 1)] : []),
       `${f(p.cut_width_mm)} × ${f(p.cut_height_mm)}`, p.seams.join(', ')]));
   table($('seam-table'), ['seam', 'panels', 'body (mm)', 'flat (mm)', 'mismatch (mm)', 'before matching'],
     r.seams.map((s) => [s.seam, `${s.left_panel}↔${s.right_panel}`, f(s.body_length_mm),
@@ -935,7 +951,7 @@ async function run() {
     };
     const t0 = performance.now();
     const res = source() === 'human'
-      ? await call({ command: 'garment', body: readBody(), design, materials, pattern: true, options })
+      ? await call({ command: 'garment', body: readBody(), design, materials, pattern: true, options, pose: $('pose').value })
       : await call({ command: 'pattern', obj, seams, scale, options });
     if (!res.ok) throw new Error(res.error);
     show(res.output, extra);

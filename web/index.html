@@ -74,6 +74,8 @@
           <h3>Shape</h3>
           <p class="hint">Set by eye. Body type blends the women's and men's figures.</p>
           <div id="shape-inputs" class="shape-grid"></div>
+          <label class="check" title="By default the body is shown as a dressmaker's mannequin: face, nipples and genitals smoothed away. Tick for the full anatomical detail.">
+            <input type="checkbox" id="s-realistic"> Realistic detail</label>
         </div>
         <div class="row">
           <button type="button" id="fit-body" class="primary">Update body</button>
@@ -174,6 +176,16 @@
           <button type="button" id="g-undo" title="Remove the last point of the selected curve"><svg><use href="#i-undo"/></svg><span>Undo point</span></button>
           <button type="button" id="g-delete" title="Delete the selected curve"><svg><use href="#i-delete"/></svg><span>Delete</span></button>
         </div>
+        <div class="spacer"></div>
+        <select id="pose" aria-label="Pose" title="See the body, and check the pattern, in another pose. Patterns are always drafted standing.">
+          <option value="standing">Standing</option>
+          <option value="arms-up">Arms up</option>
+          <option value="arms-forward">Reaching forward</option>
+          <option value="arms-out">Arms out</option>
+          <option value="squat">Squat</option>
+          <option value="sitting">Sitting</option>
+          <option value="step">Walking step</option>
+        </select>
       </div>
       <div class="view-body">
         <canvas id="viewer" aria-label="3D view of the body"></canvas>
@@ -299,6 +311,8 @@
         <div id="materials-out"></div>
         <div id="assembly-out"></div>
         <h3>Pieces</h3>
+        <p id="pose-note" class="hint" hidden>Pose figures show the same flat pieces on the body in the chosen pose.
+          Near the armpits and groin they run high: the model's skin cannot slide over the joint the way real skin does.</p>
         <table id="panel-table"></table>
         <h3>Seams</h3>
         <table id="seam-table"></table>
