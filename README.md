@@ -14,6 +14,9 @@ Everything also runs in the browser (WebAssembly, no server-side code).
 Every push to `main` deploys it to GitHub Pages:
 https://manfromth3m0on.github.io/pattener/
 
+New to it? The [tutorial](docs/tutorial.md) walks through making a
+sleeveless top, from measurements to the printed pattern.
+
 The app is a design workspace:
 - **Top bar:** the project (name, New, Open, Save) and **Make pattern**.
 - **Left panel:** the **Body** (measurements, shape), the **Garment** (templates, curves, ease zones) and the latex **Sheets**.
