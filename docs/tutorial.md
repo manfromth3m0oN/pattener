@@ -1,315 +1,134 @@
-# Tutorial: a sleeveless top
+# Tutorial: a sleeveless top, from measurements to the printed pattern
 
-This walks through the whole app by making one simple garment: a fitted,
-sleeveless latex top with a scoop neck. It has two pieces, a front and a
-back, joined at the shoulders and sides. The neckline and armholes are bound
-with trim strips and the hem is folded.
+This walks through the whole of latexpat with one garment: a close-fitting
+sleeveless top with a scooped neckline and princess lines. It takes about
+ten minutes. Open the app (https://manfromth3m0on.github.io/pattener/, or
+locally as in the [README](../README.md#web-app)); the finished project is
+[`tutorial/sleeveless-top.latexpat.json`](tutorial/sleeveless-top.latexpat.json)
+if you want to open it alongside (**Open** in the top bar).
 
-You will:
-1. build a body from your measurements;
-2. draw the top on it: three edges and two seams;
-3. choose how each edge is finished;
-4. make the pattern, then read the report and the pressure map;
-5. check the fit in another pose;
-6. save the project, and print and assemble the pieces.
+## 1. Measurements
 
-It takes about 20 minutes. The app runs in the browser at
-https://manfromth3m0on.github.io/pattener/ (nothing is uploaded; it all runs
-on your device). The finished project is in
-[`tutorial/sleeveless-top.latexpat.json`](tutorial/sleeveless-top.latexpat.json):
-**Open** it to compare with yours, or to skip ahead.
+On the **Body** tab pick **Women's** or **Men's** and fill in what you
+have. Hover over (or tap) a name for how to take it. You don't need all
+seventeen: the rest are estimated from the figure and the measurements you
+give, and shown greyed in their fields. For a top, the height, waist height,
+bust, underbust, waist, hips, neck and shoulder width matter most.
 
-The screenshots are from a desktop browser. On a phone the same panels are
-screens, chosen from the tab bar at the bottom.
+![Measurements on the Body tab, with the estimated ones greyed](tutorial/01-body.png)
 
-## The workspace
+The dashed lines across the design are the body's levels (neck, shoulder,
+underarm, bust, waist, hip…) worked out from your measurements. Pieces are
+drawn at body size, at their real height above the floor, so the levels run
+across them where they fall on the body.
 
-![The workspace with the Body panel open](tutorial/01-body.png)
+## 2. Start from a template
 
-- **Top bar:** the project name, **New**, **Open**, **Save**, and **Make pattern**.
-- **Left panel:** **Body** (measurements and shape), **Garment** (templates and the curves you draw) and **Sheets** (the latex you will cut from).
-- **Middle:** the 3D view with the drawing tools above it, and the flat **Pattern** pieces beside it.
-- **Right panel:** the **Inspector** for the selected curve, the pattern **Settings**, and the **Report**.
+The app opens with the **Sleeveless top** template drafted for the typical
+figure; once you enter measurements, it is redrafted for them straight away.
+On the **Garment** tab you can start another template instead.
 
-In the 3D view, drag to turn the body, scroll (or pinch) to zoom, and
-double-click (or double-tap) to reset the view.
+![The sleeveless top: front and back, both cut on the fold](tutorial/02-template.png)
 
-Click the project name (top left) and call it *Sleeveless top*.
+The top is the right half of the garment: a front and a back, each **cut on
+the fold** at the centre (the dash-dot line). Coloured edges are seams, with
+their lengths listed on the left: the shoulder seams and the side seams.
+The dots mark the ends of a seam that meet. The neckline and armholes are
+open edges, finished with trim strips; the hem is folded.
 
-## 1. The body
+## 3. Scoop the neckline
 
-Open the **Body** tab and keep **Full body** selected. Pick **Women's** or
-**Men's**; the rest of this tutorial uses the women's figure.
+Click a piece to select it: its points appear. Drag the point at the
+centre front of the neckline down. With **Snap** on, points move by whole
+millimetres and catch on the levels. The point is a *joint* (a diamond): the
+neckline stays square to the fold, so the unfolded neckline has no point at
+the centre.
 
-Fill in the measurements you have, in cm (or switch the units to mm or
-inches). Hover over, or tap, a measurement's name for how to take it. For a
-top, these matter most:
-- **Height**
-- **Bust / chest**, **Underbust** and **Waist**
-- **Hips**: the top ends at the hips.
+![The front neckline lowered; the Inspector shows the point](tutorial/03-neckline.png)
 
-Leave the rest empty and the app estimates them from the others. Then press
-**Update body**. The orange lines on the body are where each measurement you
-gave is taken; grey lines are estimated ones. If a combination can't be
-reached, a warning under the button says by how much.
+The **Inspector** on the right shows what is selected: here the point's
+kind and its position. *Corner* points (squares) make a sharp corner and
+start a new edge; *smooth* points (circles) are just for shaping the curve:
+double-click an edge to add one, or use the **Point** tool. Everything can
+be undone with **Ctrl+Z**.
 
-The **Shape** sliders (body type, muscle, cup, belly, buttocks) are set by
-eye, since a tape can't tell them apart. The body is shown as a dressmaker's
-mannequin; tick **Realistic detail** for the full model. Neither changes the
-measurements.
+## 4. Raise the armholes
 
-## 2. Plan the garment
+Drag the underarm points of the front and back up and in a little for a
+higher, sportier armhole. Do the same on both pieces so the side seams
+still match: the seam list shows a seam's two lengths if they differ.
+Click an edge to see its length and finish:
 
-A garment is drawn on the body with two kinds of curve:
-- **Edges** (yellow) are where the latex ends: necklines, armholes, hems. Each is a closed loop.
-- **Seams** (blue) are where two pieces are glued together. They split the garment into pieces that can lie flat. Each seam must end on an edge or on another seam (within 2 cm).
+![The front armhole selected: a 15 mm trim strip](tutorial/04-armhole.png)
 
-Then one click **inside** the garment tells the app which side of the edges
-is latex.
+Open edges can be left raw (latex doesn't fray), hemmed, or bound with a
+trim strip cut 10 % shorter than the edge so it hugs the body. Edges with
+the same name share one strip: the front and back armholes make one armhole
+strip.
 
-For this top:
+## 5. Add princess lines
 
-| Curve | Kind | Where |
-|---|---|---|
-| neckline | edge | around the base of the neck, scooping down at the front |
-| armhole | edge | around the right armhole, mirrored to the left |
-| hem | edge | around the hips |
-| shoulder | seam | along the top of the shoulder, from the neckline to the armhole, mirrored |
-| side | seam | down the side, from the bottom of the armhole to the hem, mirrored |
+Pick the **Split** tool and click two points on the front's outline: one on
+the armhole, one on the hem. The front is cut along the line into a centre
+front and a side front, joined by a new seam. Since the side front no longer
+reaches the fold, it is cut as a mirrored pair (×2). Drag the pieces apart
+and rename them in the Inspector.
 
-Garments are **symmetric** unless you tick **Asymmetric design**. A curve with
-**Mirror to other side** ticked is drawn once and copied to the other side.
-The matching pieces come out as exact mirror images.
+![The front split into a centre front and a side front pair](tutorial/05-princess.png)
 
-Open the **Garment** tab. The curves you draw are listed there; click one to
-select it and edit it in the **Inspector**.
+The new seam is straight; add smooth points to it with the Point tool and
+drag them to curve it over the bust (curve both sides alike, and check the
+seam's two lengths in the Inspector). The **Join** tool sews any two edges
+together in the same way, and **Piece** draws a new piece from scratch.
 
-## 3. The neckline
+## 6. Settings
 
-Click **Edge** (the first tool above the 3D view), then click points on the
-body, all the way around the neck:
-- **Front:** start at the centre front, about 9 cm below the hollow of the throat.
-- **Sides:** curve up to the top of the shoulder, just beside the neck.
-- **Back:** carry on round the back of the neck, just below the knobbly vertebra at its base, and down the other side to where you started.
+On the **Settings** tab, **Ease** is how much smaller the pattern is than
+the body around it: 0.85 stretches by about 18 % when worn. Latex is usually
+reduced less along the body than around it: set **Lengthwise** to 30–50 %.
+Here it is 50 %. "Along" is the way the arrow on each piece points: the
+templates are drawn upright, so their arrows point up the page. If you draw
+a piece turned (a strap lying on its side, say), drag the round handle at
+the head of its arrow until it points up the body. Glue, hem and zip
+allowances and the notch spacing are set here too, and the paper size of
+the printable PDF.
 
-About ten points are enough. The curve passes smoothly through them and
-closes by itself (it's an edge, so **Closed loop** is ticked). Turn the body
-as you go to reach the back.
+![Pattern settings](tutorial/06-settings.png)
 
-![The scoop neckline, drawn as a closed edge around the base of the neck](tutorial/02-neckline.png)
+Each latex sheet (on the **Sheets** tab) can have its own ease, or come
+from a swatch calibration of your own stretch tests; select a piece to cut
+it from another sheet.
 
-In the **Inspector**, set its **Name** to *neckline*.
+## 7. Make the pattern
 
-To fix a point, select the curve and drag the point along the body. **Undo
-point** removes the last point you clicked; **Delete** removes the selected
-curve.
+Press **Make pattern**. The pieces appear on the right as they will be
+cut: reduced by the ease, unfolded, with glue laps (dashed line inside the
+cut line), numbered notches matched across each seam, an arrow up the body,
+and labels saying what each edge joins.
 
-## 4. The armholes
+![The pattern: the side front, with its lap and notches](tutorial/07-pattern.png)
 
-Click **Edge** again and click around the right armhole:
-- start on top of the shoulder, about a hand's width out from the neck;
-- go down the front, where the arm meets the chest;
-- go under the arm, about 3 cm below the armpit;
-- come up the back, where the arm meets the back.
+The **Report** has the downloads (`pattern.pdf`, one SVG per piece, trim
+strips, the layout on each sheet), the length of each roll to buy and its
+cost, and the assembly guide:
 
-Eight to ten points. Name it *armhole* and tick **Mirror to other side**: the
-left armhole appears too.
+![The report: materials, layout and the assembly guide](tutorial/08-report.png)
 
-![The armhole, drawn around the right shoulder](tutorial/03-armholes.png)
+## 8. Print and make it
 
-## 5. The hem
+Print `pattern.pdf` at 100 % (actual size) and check the 50 mm square on
+the first page. Trim each page on its corner marks, tape the pages
+together, and cut the pieces out. A piece marked "cut 2" is cut once as
+printed and once flipped over.
 
-One more **Edge**, around the hips at the length you want, about twelve
-points all the way round. Name it *hem*.
+Then follow the assembly guide: mark the notches with a pen (snipping
+latex starts tears), glue the shoulders, then the princess and side seams,
+fold and glue the hem, and stretch the trim strips evenly round the
+neckline and armholes, matching their quarter marks to the edges' quarters.
 
-![The hem around the hips](tutorial/04-hem.png)
+## Changing size later
 
-The status under the curve list now says **Pick a point inside the garment**:
-the app has the edges but doesn't yet know which side of them is latex.
-
-## 6. The seams
-
-Click **Seam** (the second tool). For the shoulder:
-1. Click **on the neckline**, on top of the shoulder.
-2. Click **on the armhole**, on top of the shoulder.
-
-Two points are enough. Name it *shoulder* and tick **Mirror to other side**.
-
-Then a second **Seam** down the side of the body:
-1. Click **on the armhole**, under the arm.
-2. Click a few points down the side.
-3. Finish **on the hem**.
-
-Name it *side* and mirror it.
-
-A seam's ends snap onto an edge or another seam within 2 cm, so start and
-finish each one right on the yellow line.
-
-![The side seam, from the armhole to the hem](tutorial/05-seams.png)
-
-## 7. Inside
-
-Click **Inside** (the target tool) and click once on the front of the body,
-between the bust and the hem. The latex appears in the colour of its sheet,
-and the status reads:
-
-> Ready: the seams cut this garment into 2 flat pieces.
-
-![The garment, in black latex](tutorial/06-inside.png)
-
-If it says instead that a piece **still wraps around the body**, a seam
-doesn't reach its edge. Select the seam and drag its end onto the edge.
-Without a joined seam the front and back are one tube, and a tube can't be
-laid flat.
-
-## 8. How each edge is finished
-
-Select each edge in the curve list and set its **Finish** in the Inspector:
-
-| Edge | Finish | Width |
-|---|---|---|
-| neckline | trim strip | 15 mm |
-| armhole | trim strip | 15 mm |
-| hem | folded hem | 20 mm |
-
-A **trim strip** is a separate strip of latex glued round the edge. It is cut
-shorter than the edge (90 % by default, the **Trim length**) so it pulls the
-edge snugly against the body. A **folded hem** turns the given width under and
-glues it. **Raw** leaves the edge as cut, which is fine for latex since it
-doesn't fray.
-
-Seams default to **glued (lap)**: one piece's allowance glues under the
-other's edge. Choose **zip** on a seam for a zip instead.
-
-![The finishes in the curve list, and the Inspector](tutorial/07-finish.png)
-
-## 9. Pattern settings
-
-Open **Settings** in the right panel.
-
-![Pattern settings](tutorial/08-settings.png)
-
-- **Ease** (0.85): the pattern is 85 % of the body's size, so the latex stretches about 18 % when worn. Higher is looser, lower is tighter.
-- **Lengthwise (% of around)**: latex is usually reduced less along the body than around it. Set **40** so the top doesn't ride up.
-- **Thickness** (0.40 mm): used for the pressure map. Your sheets can also carry their own thickness and ease, in the **Sheets** tab.
-- **Glue allowance** (6 mm): the lap added to one side of each seam.
-- **Notch spacing** (50 mm): matching marks along each seam.
-- **Printable PDF** (A4 or Letter): every piece at full size, tiled over pages.
-
-The settings are saved with the project.
-
-## 10. Make the pattern
-
-Press **Make pattern** (top right). It takes a few seconds.
-
-![The pattern: the garment on the body, the flat pieces, and the report](tutorial/09-pattern.png)
-
-The **Pattern** view shows the pieces on a cutting mat (use **Zoom** to
-resize them):
-- **Front (piece 0):** the deep scoop.
-- **Back (piece 1):** the shallower neckline.
-
-On each piece:
-- the solid line is the cut line;
-- the dashed line is the seam line, where a piece carries a glue allowance;
-- the numbered ticks are notches: each number is on two pieces, at the same point of the body.
-
-Tick **Live** to remake the pattern after every change to the curves.
-
-The **Report** tab lists everything about the result.
-
-![The report: warnings, downloads, materials and the layout on the roll](tutorial/10-report.png)
-
-- **Warnings**, also counted in the status bar.
-- **Downloads:**
-  - one SVG per piece;
-  - `pattern.pdf` to print;
-  - the layout on your roll;
-  - one SVG per trim strip;
-  - `report.json` with every number.
-- **Materials:** how much of each sheet to buy. Here 0.89 m of a 1000 mm roll.
-- **Assembly:** the order to glue it together (see step 13).
-- **Pieces:** a row per piece. The columns:
-  - **min σ / max σ:** the range of stretch;
-  - **95 % under:** the stretch that 95 % of the piece's area stays under, here about 1.28 for the front and 1.22 for the back;
-  - **slack:** area that won't stretch, which tends to wrinkle;
-  - **mmHg:** how hard the piece presses on the body;
-  - **bridging:** area that spans a hollow without touching;
-  - **cut size.**
-- **Seams:** each seam's length on the body and on both pieces. Seam matching evens the two sides out, so they glue together without puckering.
-
-## 11. The pressure map, and the bust
-
-After Make pattern, the garment on the body is coloured by pressure. Blue is
-where the latex bridges a hollow (between the breasts, the small of the back),
-white is light, and orange to red presses harder; 15–20 mmHg is light
-compression. Untick **Pressure** to see the latex colour again.
-
-![The pressure map, with red rings at the bust](tutorial/11-pressure.png)
-
-The red rings at the bust match the one warning in the report:
-
-> piece 0 has to distort by about 11 % to lie flat around … where the body
-> curves both ways: a dart or seam from the nearest edge towards it … would
-> let it lie flatter
-
-A flat sheet can only follow a surface that curves one way at a time, and a
-bust curves both ways. This top has no shaping there, so the front stretches
-more over the bust. In latex that is often fine (it's why latex tops can be so
-simple). If you want a smoother fit:
-- **Princess seams:** draw seams from the shoulder or armhole down over the bust to the hem (as in the **Princess-seam top** template). The front becomes three pieces that curve over the bust.
-- **Ease zone:** use **Zone** to click on the bust and give it a looser ease.
-
-## 12. Check it in a pose
-
-Patterns are always drafted standing, but you move in them. Pick **Arms up**
-in the **Pose** menu (top right of the 3D view) and press **Make pattern**
-again.
-
-![The top on the body with arms raised](tutorial/12-arms-up.png)
-
-The **Pieces** table gains two columns: the stretch and pressure in that pose.
-With arms up, the front's 95 % stretch goes from 1.28 to about 1.53 and the
-back's from 1.22 to about 1.90, mostly around the armholes. Near the armpits
-the posed figures run high, because the model's skin can't slide over the
-joint the way real skin does. If they look too high for your taste:
-- lower the armholes;
-- loosen the ease;
-- move to set-in sleeves.
-
-Set the pose back to **Standing** when you're done.
-
-## 13. Save, print and make it
-
-**Save** downloads the project as `Sleeveless_top.latexpat.json`, holding the
-body, the garment, the sheets and the pattern settings. **Open** brings it back. The app also keeps
-your work in the browser between visits.
-
-To print:
-1. Download `pattern.pdf` from the Report.
-2. Print it at **100 %** (no "fit to page").
-3. Measure the 50 mm check square.
-4. Trim the pages at the corner marks and tape them together by their row/column labels.
-
-You can also print the SVGs, which have a 50 mm scale bar.
-
-The **Assembly** list for this top reads:
-
-1. Cut each piece along its solid line and mark every numbered notch with a pen (do not snip latex: a cut starts a tear).
-2. Join pieces 1 and 0 along the shoulder seam: glue piece 1's 6 mm lap (outside its dashed line) under piece 0's edge; match notch 1.
-3. Close pieces 1 and 0 along the shoulder (mirror) seam the same way; match notch 2.
-4. Close pieces 0 and 1 along the side seam: glue piece 0's 6 mm lap under piece 1's edge; match notches 3–10.
-5. Close the other side seam the same way; match notches 11–18.
-6. Hem the hem edge: fold the 20 mm allowance to the inside along the dashed line and glue it.
-7. Finish the neckline with its trim strip, 15 × 487 mm. It is 10 % shorter than the edge, so stretch it evenly as you glue it on.
-8. Finish each armhole with its trim strip, 15 × 344 mm, the same way.
-
-The trim strips are drawn in `trim_NN.svg` (and in the PDF) with quarter
-marks: match those to the quarters of the edge so the stretch is even all
-round. Your lengths will differ with your measurements.
-
-## Where next
-
-- **Templates:** **Start from a template** in the Garment tab gives tops with set-in, raglan or cut-on sleeves, a princess-seam top, leggings, catsuits and a waist cincher. Every curve stays editable.
-- **More sheets:** add sheets in **Sheets**, then use **Paint** to make a piece from another colour or thickness. Each sheet gets its own layout and length to buy.
-- **Your own ease:** to set the ease from stretch tests of your own latex, see *Swatch calibration* in the [README](../README.md).
+Change any measurement and the design is redrafted for it, keeping your
+edits: the scooped neckline stays 4 cm lower than the template's, and the
+princess line moves with the points around it. Save the project with
+**Save**; it is also kept in the browser.

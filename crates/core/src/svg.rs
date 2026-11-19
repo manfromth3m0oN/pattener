@@ -2,136 +2,36 @@
 //!
 //! The document is sized in millimetres (`width="…mm"`) with a `viewBox` in
 //! the same units, so printing at 100 % reproduces the pattern at true
-//! size; a 50 mm scale bar is included to check the print. The piece is
-//! drawn as seen from outside the body (`y` flipped for SVG's downward
-//! axis), i.e. the face that touches the body points away from the viewer.
-//!
-//! ## Heatmap
-//! Each triangle can be filled by a stretch value `t`:
-//! - [`HeatmapMetric::MaxStretch`]: `t = σ_max`;
-//! - [`HeatmapMetric::AreaStretch`]: `t = σ_min σ_max`.
-//!
-//! Colour position `x = ln t / ln(range^k)` clamped to `[−1, 1]`, with
-//! `k = 1` for max stretch and `k = 2` for area stretch (an area stretch of
-//! `range²` corresponds to `range` in each direction). `x = −1` is blue
-//! (slack), `0` white (unstretched), `+1` orange (stretched); colours are
-//! interpolated linearly in sRGB.
+//! size; a 50 mm scale bar is included to check the print. Pieces are drawn
+//! as designed (`y` up the body, flipped for SVG's downward axis).
 
-use crate::flatten::FlatPanel;
 use crate::nest::Layout;
 use crate::pattern::PatternPiece;
-use crate::strain::PrincipalStretch;
 use glam::DVec2;
 use std::fmt::Write;
 
-/// Which stretch measure colours the heatmap.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
-pub enum HeatmapMetric {
-    /// Largest principal stretch `σ_max`.
-    MaxStretch,
-    /// Area stretch `σ_min σ_max`.
-    AreaStretch,
-}
-
-impl HeatmapMetric {
-    fn value(self, s: &PrincipalStretch) -> f64 {
-        match self {
-            HeatmapMetric::MaxStretch => s.max,
-            HeatmapMetric::AreaStretch => s.area(),
-        }
-    }
-    fn exponent(self) -> f64 {
-        match self {
-            HeatmapMetric::MaxStretch => 1.0,
-            HeatmapMetric::AreaStretch => 2.0,
-        }
-    }
-    fn label(self) -> &'static str {
-        match self {
-            HeatmapMetric::MaxStretch => "max stretch",
-            HeatmapMetric::AreaStretch => "area stretch",
-        }
-    }
-}
-
-/// SVG rendering options.
-#[derive(Debug, Clone, PartialEq)]
-pub struct SvgOptions {
-    /// Heatmap fill, or `None` for outline only.
-    pub heatmap: Option<HeatmapMetric>,
-    /// Per-direction stretch at which the colour saturates (e.g. 1.5).
-    pub range: f64,
-    /// Blank margin around the piece (mm).
-    pub margin: f64,
-    /// Title printed above the piece.
-    pub label: Option<String>,
-    /// Text placed along chains of boundary edges (e.g. seam names).
-    pub edge_labels: Vec<EdgeLabel>,
-}
-
-/// A label along a chain of boundary edges, placed at its arc-length
-/// midpoint, 10 mm inside the piece (clear of notch numbers) and parallel to
-/// the edge.
-#[derive(Debug, Clone, PartialEq)]
-pub struct EdgeLabel {
-    /// Indices into the panel's `boundary`, in order.
-    pub edges: Vec<usize>,
-    pub text: String,
-}
-
-impl Default for SvgOptions {
-    fn default() -> Self {
-        Self {
-            heatmap: None,
-            range: 1.5,
-            margin: 10.0,
-            label: None,
-            edge_labels: Vec::new(),
-        }
-    }
-}
-
-const SLACK: [f64; 3] = [33.0, 102.0, 172.0]; // #2166ac
-const NEUTRAL: [f64; 3] = [255.0, 255.0, 255.0];
-const TAUT: [f64; 3] = [230.0, 97.0, 1.0]; // #e66101
-
-/// Diverging colour for a stretch value (see module docs).
-pub fn stretch_color(t: f64, range: f64, exponent: f64) -> String {
-    let x = if t.is_finite() && t > 0.0 {
-        (t.ln() / (exponent * range.ln())).clamp(-1.0, 1.0)
-    } else {
-        1.0
-    };
-    let (end, a) = if x < 0.0 { (SLACK, -x) } else { (TAUT, x) };
-    let c: [u8; 3] =
-        std::array::from_fn(|i| (NEUTRAL[i] + a * (end[i] - NEUTRAL[i])).round() as u8);
-    format!("#{:02x}{:02x}{:02x}", c[0], c[1], c[2])
-}
-
-/// Render one flattened panel as a standalone SVG document.
+/// Render one pattern piece as a standalone SVG document, with `title` and
+/// `notes` printed above it.
 ///
-/// The solid line is the cut line (seam line plus allowance); where an
-/// allowance exists the seam/glue line is drawn dashed inside it. Notches
-/// are ticks across the seam line labelled with their number.
-pub fn panel_svg(fp: &FlatPanel, piece: &PatternPiece, opts: &SvgOptions) -> String {
-    // Flip y so the piece reads correctly in SVG's y-down space.
+/// The solid line is the cut line; where it carries an allowance the seam
+/// line is drawn dashed inside it. Notches are ticks across the seam line
+/// with their number; edges are labelled with what they join. A folded
+/// piece shows its centre line (dash-dot), and an arrow points up the
+/// body, the direction of the lengthwise reduction.
+pub fn piece_svg(piece: &PatternPiece, title: &str, notes: &[String]) -> String {
     let flip = |p: DVec2| DVec2::new(p.x, -p.y);
-    let pts: Vec<DVec2> = fp.uv.iter().map(|&p| flip(p)).collect();
     let cut: Vec<DVec2> = piece.cut_outline.iter().map(|&p| flip(p)).collect();
-    let (mut lo, mut hi) = (DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY));
-    for p in pts.iter().chain(&cut) {
-        lo = lo.min(*p);
-        hi = hi.max(*p);
-    }
-    let m = opts.margin;
-    let header = 6.0 + if opts.label.is_some() { 6.0 } else { 0.0 };
+    let line: Vec<DVec2> = piece.seam_line.iter().map(|&p| flip(p)).collect();
+    let (mut lo, mut hi) = crate::geom::bounds(&cut);
+    let (l2, h2) = crate::geom::bounds(&line);
+    lo = lo.min(l2);
+    hi = hi.max(h2);
+    let m = 10.0;
+    let header = 6.0 + 5.0 * notes.len() as f64 + 4.0;
     let footer = 12.0;
     let x0 = lo.x - m;
     let y0 = lo.y - m - header;
-    let w = (hi.x - lo.x) + 2.0 * m;
-    let w = w.max(70.0);
+    let w = ((hi.x - lo.x) + 2.0 * m).max(90.0);
     let h = (hi.y - lo.y) + 2.0 * m + header + footer;
 
     let mut s = String::new();
@@ -144,49 +44,18 @@ pub fn panel_svg(fp: &FlatPanel, piece: &PatternPiece, opts: &SvgOptions) -> Str
         s,
         r#"<g font-family="sans-serif" font-size="3.5" fill="black">"#
     );
-    let mut ty = lo.y - m - header + 4.5;
-    if let Some(label) = &opts.label {
-        let _ = writeln!(
-            s,
-            r#"<text x="{:.3}" y="{ty:.3}" font-size="5">{}</text>"#,
-            lo.x - m + 2.0,
-            escape(label)
-        );
-        ty += 6.0;
-    }
-    let r = &fp.strain;
+    let tx = lo.x - m + 2.0;
+    let mut ty = y0 + 6.0;
     let _ = writeln!(
         s,
-        r#"<text x="{:.3}" y="{ty:.3}">stretch {:.3}–{:.3} (95 % under {:.3}), mean area ×{:.3}{}</text>"#,
-        lo.x - m + 2.0,
-        r.min_stretch,
-        r.max_stretch,
-        r.p95_stretch,
-        r.mean_area_stretch,
-        if r.flipped.is_empty() {
-            String::new()
-        } else {
-            format!(", {} FLIPPED", r.flipped.len())
-        }
+        r#"<text x="{tx:.3}" y="{ty:.3}" font-size="5">{}</text>"#,
+        escape(title)
     );
-    let _ = writeln!(s, "</g>");
-
-    if let Some(metric) = opts.heatmap {
-        let _ = writeln!(
-            s,
-            r#"<g id="heatmap" stroke-width="0.05" stroke-linejoin="round">"#
-        );
-        for (t, tri) in fp.panel.triangles.iter().enumerate() {
-            let c = stretch_color(metric.value(&r.triangles[t]), opts.range, metric.exponent());
-            let [a, b, d] = tri.map(|i| pts[i as usize]);
-            let _ = writeln!(
-                s,
-                r#"<path d="M{:.3} {:.3}L{:.3} {:.3}L{:.3} {:.3}Z" fill="{c}" stroke="{c}"/>"#,
-                a.x, a.y, b.x, b.y, d.x, d.y
-            );
-        }
-        let _ = writeln!(s, "</g>");
+    for n in notes {
+        ty += 5.0;
+        let _ = writeln!(s, r#"<text x="{tx:.3}" y="{ty:.3}">{}</text>"#, escape(n));
     }
+    let _ = writeln!(s, "</g>");
 
     // Cut line.
     let _ = writeln!(
@@ -194,13 +63,14 @@ pub fn panel_svg(fp: &FlatPanel, piece: &PatternPiece, opts: &SvgOptions) -> Str
         r#"<path id="cut-line" d="{}" fill="none" stroke="black" stroke-width="0.3" stroke-linejoin="round"/>"#,
         closed_path(&cut)
     );
-    // Seam (glue) line wherever it differs from the cut line.
-    if piece.edge_allowance.iter().any(|&d| d > 0.0) {
+    // Seam line wherever it differs from the cut line.
+    let runs = allowance_runs(piece);
+    if !runs.is_empty() {
         let mut d = String::new();
-        for (k, e) in fp.panel.boundary.iter().enumerate() {
-            if piece.edge_allowance[k] > 0.0 {
-                let (a, b) = (pts[e.from as usize], pts[e.to as usize]);
-                let _ = write!(d, "M{:.3} {:.3}L{:.3} {:.3}", a.x, a.y, b.x, b.y);
+        for run in &runs {
+            for (k, p) in run.iter().enumerate() {
+                let p = flip(*p);
+                let _ = write!(d, "{}{:.3} {:.3}", if k == 0 { "M" } else { "L" }, p.x, p.y);
             }
         }
         let _ = writeln!(
@@ -208,13 +78,39 @@ pub fn panel_svg(fp: &FlatPanel, piece: &PatternPiece, opts: &SvgOptions) -> Str
             r#"<path id="seam-line" d="{d}" fill="none" stroke="black" stroke-width="0.2" stroke-dasharray="2 1"/>"#
         );
     }
+    if let Some([a, b]) = piece.fold_line {
+        let (a, b) = (flip(a), flip(b));
+        let _ = writeln!(
+            s,
+            r#"<path id="fold-line" d="M{:.3} {:.3}L{:.3} {:.3}" stroke="gray" stroke-width="0.25" stroke-dasharray="6 1.5 1 1.5"/>"#,
+            a.x, a.y, b.x, b.y
+        );
+    }
+    // Arrow up the body through the middle of the piece.
+    let (g0, g1) = grain_arrow(piece);
+    let [b0, b1] = arrow_barbs(g0, g1);
+    let (g0, g1, b0, b1) = (flip(g0), flip(g1), flip(b0), flip(b1));
+    let _ = writeln!(
+        s,
+        r#"<g id="grain" stroke="gray" stroke-width="0.3" fill="none"><path d="M{:.3} {:.3}L{:.3} {:.3}M{:.3} {:.3}L{:.3} {:.3}L{:.3} {:.3}"/></g>"#,
+        g0.x, g0.y, g1.x, g1.y, b0.x, b0.y, g1.x, g1.y, b1.x, b1.y
+    );
+    let c = 0.5 * (g0 + g1);
+    let _ = writeln!(
+        s,
+        r#"<text x="{:.3}" y="{:.3}" font-family="sans-serif" font-size="6" text-anchor="middle" fill="gray">{}</text>"#,
+        c.x + 4.0,
+        c.y,
+        escape(&piece.name)
+    );
+
     if !piece.notches.is_empty() {
         let _ = writeln!(
             s,
             r#"<g id="notches" stroke="black" stroke-width="0.3" font-family="sans-serif" font-size="2.5" text-anchor="middle">"#
         );
         for n in &piece.notches {
-            let out = piece.edge_allowance[n.boundary_edge].max(2.0);
+            let out = n.allowance.max(2.0);
             let (a, b) = (
                 flip(n.position - 4.0 * n.normal),
                 flip(n.position + out * n.normal),
@@ -228,36 +124,33 @@ pub fn panel_svg(fp: &FlatPanel, piece: &PatternPiece, opts: &SvgOptions) -> Str
         }
         let _ = writeln!(s, "</g>");
     }
-
-    if !opts.edge_labels.is_empty() {
+    if !piece.labels.is_empty() {
         let _ = writeln!(
             s,
             r#"<g id="edge-labels" font-family="sans-serif" font-size="2.5" text-anchor="middle">"#
         );
-        for l in &opts.edge_labels {
-            if let Some((p, dir)) = edge_chain_midpoint(fp, &l.edges) {
-                // Interior is to the left of the boundary direction.
-                let q = p + 10.0 * dir.perp(); // beyond notch numbers (6.5 mm)
-                                               // To SVG space (y flipped); keep the text upright.
-                let mut a = (-dir.y).atan2(dir.x).to_degrees();
-                if a > 90.0 {
-                    a -= 180.0;
-                } else if a < -90.0 {
-                    a += 180.0;
-                }
-                let _ = writeln!(
-                    s,
-                    r#"<text transform="translate({:.3} {:.3}) rotate({a:.2})" dominant-baseline="middle">{}</text>"#,
-                    q.x,
-                    -q.y,
-                    escape(&l.text)
-                );
+        for l in &piece.labels {
+            // Inside is to the left of the outline's direction; beyond the
+            // notch numbers (6.5 mm).
+            let q = l.at + 10.0 * l.dir.perp();
+            let mut a = (-l.dir.y).atan2(l.dir.x).to_degrees();
+            if a > 90.0 {
+                a -= 180.0;
+            } else if a < -90.0 {
+                a += 180.0;
             }
+            let _ = writeln!(
+                s,
+                r#"<text transform="translate({:.3} {:.3}) rotate({a:.2})" dominant-baseline="middle">{}</text>"#,
+                q.x,
+                -q.y,
+                escape(&l.text)
+            );
         }
         let _ = writeln!(s, "</g>");
     }
 
-    // Footer: 50 mm scale bar and legend.
+    // Footer: 50 mm scale bar.
     let fy = hi.y + m + 4.0;
     let fx = lo.x - m + 2.0;
     let _ = writeln!(
@@ -273,29 +166,62 @@ pub fn panel_svg(fp: &FlatPanel, piece: &PatternPiece, opts: &SvgOptions) -> Str
         fx,
         fy + 4.0
     );
-    if let Some(metric) = opts.heatmap {
-        let lx = fx + 56.0;
-        let k = metric.exponent();
-        let stops = [1.0 / opts.range.powf(k), 1.0, opts.range.powf(k)];
-        for (i, v) in stops.iter().enumerate() {
-            let x = lx + i as f64 * 14.0;
-            let _ = writeln!(
-                s,
-                r#"<rect x="{x:.3}" y="{:.3}" width="4" height="3" fill="{}" stroke="black" stroke-width="0.1"/><text x="{:.3}" y="{fy:.3}" font-family="sans-serif" font-size="3">{v:.2}</text>"#,
-                fy - 2.5,
-                stretch_color(*v, opts.range, k),
-                x + 5.0
-            );
-        }
-        let _ = writeln!(
-            s,
-            r#"<text x="{lx:.3}" y="{:.3}" font-family="sans-serif" font-size="3">{}</text>"#,
-            fy + 4.0,
-            metric.label()
-        );
-    }
     let _ = writeln!(s, "</svg>");
     s
+}
+
+/// Runs of the seam line that carry an allowance (open polylines).
+pub fn allowance_runs(piece: &PatternPiece) -> Vec<Vec<DVec2>> {
+    let n = piece.seam_line.len();
+    let has = |i: usize| piece.allowance[i % n] > 0.0;
+    let Some(start) = (0..n).find(|&i| !has(i)) else {
+        // Allowance all round: one closed run.
+        let mut run = piece.seam_line.clone();
+        run.push(piece.seam_line[0]);
+        return vec![run];
+    };
+    let mut runs = Vec::new();
+    let mut cur: Vec<DVec2> = Vec::new();
+    for j in 1..=n {
+        let i = (start + j) % n;
+        if has(i) {
+            if cur.is_empty() {
+                cur.push(piece.seam_line[i]);
+            }
+            cur.push(piece.seam_line[(i + 1) % n]);
+        } else if !cur.is_empty() {
+            runs.push(std::mem::take(&mut cur));
+        }
+    }
+    if !cur.is_empty() {
+        runs.push(cur);
+    }
+    runs
+}
+
+/// An arrow through the middle of a piece, pointing up the body (see
+/// [`Piece::up_deg`](crate::design::Piece::up_deg)): its tail and head.
+pub fn grain_arrow(piece: &PatternPiece) -> (DVec2, DVec2) {
+    let (lo, hi) = crate::geom::bounds(&piece.seam_line);
+    let c = 0.5 * (lo + hi);
+    let u = piece.reduction.up_dir();
+    // Extent of the piece along the arrow.
+    let ext = piece
+        .seam_line
+        .iter()
+        .map(|p| (*p - c).dot(u))
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), t| {
+            (a.min(t), b.max(t))
+        });
+    let half = (0.2 * (ext.1 - ext.0)).clamp(15.0, 80.0);
+    (c - half * u, c + half * u)
+}
+
+/// The two barbs of an arrowhead at `head`, for an arrow from `tail`.
+pub fn arrow_barbs(tail: DVec2, head: DVec2) -> [DVec2; 2] {
+    let d = (head - tail).normalize_or_zero();
+    let n = d.perp();
+    [head - 4.0 * d + 2.0 * n, head - 4.0 * d - 2.0 * n]
 }
 
 /// Render a trim strip at 1:1: its outline, with marks at each quarter of
@@ -398,27 +324,6 @@ pub fn layout_svg(outlines: &[Vec<DVec2>], labels: &[String], layout: &Layout) -
     s
 }
 
-/// Arc-length midpoint of a chain of boundary edges (flat coordinates) and
-/// the unit direction of the edge it falls on.
-fn edge_chain_midpoint(fp: &FlatPanel, edges: &[usize]) -> Option<(DVec2, DVec2)> {
-    let seg = |bi: usize| {
-        let e = fp.panel.boundary[bi];
-        (fp.uv[e.from as usize], fp.uv[e.to as usize])
-    };
-    let total: f64 = edges.iter().map(|&b| seg(b).0.distance(seg(b).1)).sum();
-    let mut left = 0.5 * total;
-    for &b in edges {
-        let (a, c) = seg(b);
-        let len = a.distance(c);
-        if left <= len && len > 0.0 {
-            let dir = (c - a) / len;
-            return Some((a + dir * left, dir));
-        }
-        left -= len;
-    }
-    None
-}
-
 fn closed_path(pts: &[DVec2]) -> String {
     let mut d = String::new();
     for (k, p) in pts.iter().enumerate() {
@@ -437,37 +342,42 @@ fn escape(t: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{flatten_garment, testmesh, FlattenOptions, SeamSet};
-
-    #[test]
-    fn colours() {
-        assert_eq!(stretch_color(1.0, 1.5, 1.0), "#ffffff");
-        assert_eq!(stretch_color(1.5, 1.5, 1.0), "#e66101");
-        assert_eq!(stretch_color(1.0 / 1.5, 1.5, 1.0), "#2166ac");
-        assert_eq!(stretch_color(2.25, 1.5, 2.0), "#e66101");
-        assert_eq!(stretch_color(10.0, 1.5, 1.0), "#e66101");
-    }
+    use crate::design::tests::rect;
+    use crate::design::Design;
+    use crate::pattern::{build_pattern, PatternOptions, Reduction};
 
     #[test]
     fn svg_is_mm_sized_and_contains_outline() {
-        let m = testmesh::grid(4, 2, 25.0);
-        let fp = &flatten_garment(&m, &SeamSet::default(), &FlattenOptions::default())
-            .unwrap()
-            .panels[0];
-        let svg = panel_svg(
-            fp,
-            &PatternPiece::plain(fp),
-            &SvgOptions {
-                heatmap: Some(HeatmapMetric::AreaStretch),
-                label: Some("A&B".into()),
-                ..Default::default()
-            },
-        );
-        // 100 mm × 0.85 wide piece + 2 × 10 mm margin.
-        assert!(svg.contains(r#"width="105.000mm""#), "{}", &svg[..300]);
+        let mut d = Design {
+            pieces: vec![rect("a", 100.0, 160.0)],
+            ..Default::default()
+        };
+        d.pieces[0].nodes[3].edge.fold = true;
+        d.pieces[0].name = "A&B".into();
+        let p =
+            build_pattern(&d, &[Reduction::new(0.85, 1.0)], &PatternOptions::default()).unwrap();
+        let svg = piece_svg(&p[0], "front", &["cut 1".into()]);
+        // Unfolded 200 mm × 0.85 wide piece + 2 × 10 mm margin.
+        assert!(svg.contains(r#"width="190.000mm""#), "{}", &svg[..300]);
         assert!(svg.contains(r#"id="cut-line""#));
+        assert!(svg.contains(r#"id="fold-line""#));
         assert!(!svg.contains(r#"id="seam-line""#));
-        assert_eq!(svg.matches("stroke=\"#").count(), m.triangles().len());
         assert!(svg.contains("A&amp;B"));
+    }
+
+    #[test]
+    fn allowance_runs_follow_the_outline() {
+        let d = Design {
+            pieces: vec![rect("a", 100.0, 160.0)],
+            ..Default::default()
+        };
+        let opts = PatternOptions {
+            hem_allowance: 5.0,
+            ..Default::default()
+        };
+        let p = build_pattern(&d, &[Reduction::new(1.0, 1.0)], &opts).unwrap();
+        let runs = allowance_runs(&p[0]);
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].first(), runs[0].last());
     }
 }

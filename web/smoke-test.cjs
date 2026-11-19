@@ -1,308 +1,205 @@
 // Browser smoke test for the web UI (needs Playwright with Chromium).
 //   web/build.sh && python3 -m http.server -d web 8765 &
 //   node web/smoke-test.cjs http://localhost:8765/
-// Set PW_CHANNEL=chrome to use an installed Google Chrome.
-// Run from the repository root (it uploads files from tests/data).
+// Set PW_CHANNEL=chrome to use an installed Google Chrome, or PW_EXECUTABLE
+// to the path of another Chromium.
 const { chromium, devices } = require('playwright');
 const assert = require('assert');
 
 const url = process.argv[2] || 'http://localhost:8765/';
-const done = (p) => p.waitForFunction(
-  () => !document.getElementById('run').disabled && document.getElementById('status').textContent !== 'Working…',
-  null, { timeout: 60000 });
 
 (async () => {
-  // PW_CHANNEL=chrome uses an installed Google Chrome instead of
-  // Playwright's own Chromium (as in CI). SwiftShader gives WebGL without a GPU.
   const browser = await chromium.launch({
     channel: process.env.PW_CHANNEL || undefined,
-    args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'],
+    executablePath: process.env.PW_EXECUTABLE || undefined,
   });
-  const page = await browser.newPage({ viewport: { width: 1250, height: 1000 } });
+  const page = await browser.newPage({ viewport: { width: 1350, height: 950 } });
   const errors = [];
   page.on('pageerror', (e) => errors.push(String(e)));
-  await page.goto(url);
-  // Side panels are tabbed: open a pane before using what is on it.
-  const tab = (name) => page.click(`.tabbar button[data-pane="${name}"]`);
-  // Segmented choices: click the visible label of a radio button.
-  const choose = (pg, name, value) => pg.click(`label:has(input[name=${name}][value=${value}]) span`);
-
-  // 0. Full body (the default): the example project fits without warnings.
-  const fitted = () => page.waitForFunction(
-    () => /Fitted|error|unavailable/i.test(document.getElementById('fit-status').textContent)
-      && !document.getElementById('fit-body').disabled,
-    null, { timeout: 60000 });
-  await page.evaluate(() => localStorage.clear());
-  await page.reload();
-  await fitted();
-  assert.match(await page.textContent('#fit-status'), /Fitted/);
-  assert.equal(await page.locator('#fit-warnings li').count(), 0);
-  assert.equal(await page.locator('#fit-table tr').count(), 16);
-  // An unreachable combination is flagged, and the project autosaves.
-  await page.fill('#m-underbust', '120');
-  await page.click('#fit-body');
-  await fitted();
-  assert.ok(await page.locator('#fit-warnings li').count() > 0);
-  // Pattern settings are kept with the project too.
-  await tab('settings');
-  await page.fill('#length-relief', '55');
-  await page.press('#length-relief', 'Tab');
-  await page.reload();
-  await fitted();
-  assert.equal(await page.inputValue('#m-underbust'), '120');
-  assert.equal(await page.inputValue('#length-relief'), '55');
-  assert.equal(await page.evaluate(() => readProject().settings['length-relief']), '55');
-  await tab('body');
-  await page.evaluate(() => localStorage.clear());
-  await page.reload();
-  await fitted();
-
-  // 0b. Garment on the full body: load the example, draw a curve by
-  // clicking, remove it again, and make the pattern.
   page.on('dialog', (d) => d.accept());
-  const garmentReady = () => page.waitForFunction(
-    () => /Ready|cannot|error/i.test(document.getElementById('g-status').textContent),
+  const tab = (name) => page.click(`.tabbar button[data-pane="${name}"]`);
+  const ready = () => page.waitForFunction(() => /^Ready|Fix these|No pieces/.test(document.getElementById('g-status').textContent), null, { timeout: 30000 });
+  const made = () => page.waitForFunction(
+    () => !document.getElementById('run').disabled && /^Done|error|design:/i.test(document.getElementById('status').textContent),
     null, { timeout: 60000 });
-  // Templates: the cincher makes four pieces; then work from the top.
-  await tab('garment');
-  await page.waitForFunction(() => document.querySelectorAll('#g-template option').length >= 4);
-  await page.selectOption('#g-template', 'cincher');
-  assert.match(await page.textContent('#g-template-note'), /back zip/);
-  await page.click('#g-example');
-  await page.waitForFunction(() => design.curves.some((c) => c.name === 'bottom'));
-  await garmentReady();
-  assert.match(await page.textContent('#g-status'), /4 flat pieces/);
-  // Built each side as drawn, it still makes four pieces.
-  await page.check('#g-asym');
-  await page.waitForFunction(() => design.asymmetric === true);
-  await garmentReady();
-  assert.match(await page.textContent('#g-status'), /4 flat pieces/);
-  await page.selectOption('#g-template', 'top');
-  await page.click('#g-example');
-  await page.waitForFunction(() => /2 flat pieces/.test(document.getElementById('g-status').textContent), null, { timeout: 60000 });
-  await page.click('#g-new-seam');
-  await page.locator('#viewer').scrollIntoViewIfNeeded();
-  const box = await page.locator('#viewer').boundingBox();
-  await page.mouse.click(box.x + box.width * 0.5, box.y + box.height * 0.42);
-  await page.waitForFunction(() => /1 point/.test(document.getElementById('g-curves').textContent), null, { timeout: 30000 });
-  await page.click('#g-delete');
-  await page.waitForFunction(() => document.querySelectorAll('#g-curves li').length === 5, null, { timeout: 30000 });
-  // Drag the hem's most frontal point down: it moves, no point is added,
-  // and the view does not turn.
-  await page.locator('#g-curves li').first().click();
-  // Selecting the curve can scroll the page (the list is below the view),
-  // so measure the view again before dragging on it.
-  await page.locator('#viewer').scrollIntoViewIfNeeded();
-  const dbox = await page.locator('#viewer').boundingBox();
-  const t = await page.evaluate(() => {
-    const pts = design.curves[active].points.map((sp, i) => ({ i, q: pointOf(sp) }));
-    pts.sort((a, b) => b.q[2] - a.q[2]);
-    const s = viewer.project(pts[0].q);
-    return { i: pts[0].i, x: s.x, y: s.y, y3: pts[0].q[1], n: pts.length, yaw: viewer.yaw };
-  });
-  await page.mouse.move(dbox.x + t.x, dbox.y + t.y);
-  await page.mouse.down();
-  for (let k = 1; k <= 8; k++) await page.mouse.move(dbox.x + t.x, dbox.y + t.y + 5 * k);
-  await page.mouse.up();
-  const moved = await page.evaluate((i) => ({ y3: pointOf(design.curves[active].points[i])[1], n: design.curves[active].points.length, yaw: viewer.yaw }), t.i);
-  assert.ok(moved.y3 < t.y3 - 20, `dragged point should move down: ${t.y3} -> ${moved.y3}`);
-  assert.equal(moved.n, t.n);
-  assert.equal(moved.yaw, t.yaw);
-  await garmentReady();
-  // A click right next to a point (close enough to grab it) adds a point
-  // rather than nudging that one; Undo point takes it away again.
-  const near = await page.evaluate((i) => {
-    const s = viewer.project(pointOf(design.curves[active].points[i]));
-    return { x: s.x + 6, y: s.y, n: design.curves[active].points.length };
-  }, t.i);
-  await page.mouse.click(dbox.x + near.x, dbox.y + near.y);
-  await page.waitForFunction((n) => design.curves[active].points.length === n + 1, near.n, { timeout: 10000 });
-  await page.click('#g-undo');
-  await page.waitForFunction((n) => design.curves[active].points.length === n, near.n, { timeout: 10000 });
-  await garmentReady();
-  // Paint the back with the example's second sheet (turn the view to the
-  // back first): one piece turns red.
-  await page.evaluate(() => { viewer.yaw += Math.PI; viewer.draw(); });
-  await page.selectOption('#g-paint-sheet', 'red 0.40');
-  await page.click('#g-paint');
-  await page.locator('#viewer').scrollIntoViewIfNeeded();
-  const vbox = await page.locator('#viewer').boundingBox();
-  await page.mouse.click(vbox.x + vbox.width * 0.5, vbox.y + vbox.height * 0.45);
-  await page.waitForFunction(() => design.sheet_assignments.length === 1, null, { timeout: 10000 });
-  // The preview refreshes asynchronously: wait for exactly one red piece.
-  await page.waitForFunction(
-    () => viewer.overlay && viewer.overlay.pieces
-      && viewer.overlay.pieces.filter((p) => p.color[0] > 0.5).length === 1
-      && viewer.overlay.pieces.length === 2,
-    null, { timeout: 60000 });
-  await page.click('#g-paint');
-  await page.evaluate(() => { viewer.yaw -= Math.PI; viewer.draw(); });
+  // Screen position (page coordinates) of a world point.
+  const screen = (w) => page.evaluate((w) => {
+    const r = document.getElementById('editor').getBoundingClientRect();
+    const [x, y] = editor.toScreen(w);
+    return [x + r.left, y + r.top];
+  }, w);
+  // A point on edge k of piece i, at fraction t, in world coordinates.
+  const onEdge = (i, k, t) => page.evaluate(([i, k, t]) => Geo.atFraction(editor.geometry(design.pieces[i]).edges[k], t).point, [i, k, t]);
+  const clickWorld = async (w) => { const [x, y] = await screen(w); await page.mouse.click(x, y); };
 
-  // An ease zone by clicking the body, then the pattern with lengthwise
-  // relief: the pressure map appears and the table has pressure columns.
-  await page.click('#g-zone');
-  await page.locator('#viewer').scrollIntoViewIfNeeded();
-  const zbox = await page.locator('#viewer').boundingBox();
-  await page.mouse.click(zbox.x + zbox.width * 0.5, zbox.y + zbox.height * 0.42);
-  await page.waitForFunction(() => document.querySelectorAll('#g-zones tr').length === 2, null, { timeout: 30000 });
-  await garmentReady();
-  // Finishes: the example's hem is folded; make the side seam a zip.
-  await page.locator('#g-curves li', { hasText: 'hem (edge' }).click();
-  assert.equal(await page.inputValue('#g-edge-finish'), 'hem');
-  assert.ok(await page.isHidden('#g-seam-finish-wrap'));
-  await page.locator('#g-curves li', { hasText: /^side \(seam/ }).click();
-  await page.selectOption('#g-seam-finish', 'zip');
-  assert.match(await page.locator('#g-curves').innerText(), /side \(seam.*zip\)/);
-  await tab('settings');
-  await page.fill('#length-relief', '40');
-  await page.click('#run');
-  await page.waitForFunction(
-    () => !document.getElementById('run').disabled && /Done|error/i.test(document.getElementById('status').textContent),
-    null, { timeout: 90000 });
-  assert.match(await page.textContent('#status'), /Done .*2 panels/);
-  assert.ok(await page.isVisible('#pressure-panel'));
-  assert.match(await page.locator('#panel-table').innerText(), /mmHg/);
-  // The cut-on top strains at the armpits: a hint says so.
-  assert.match(await page.locator('#warnings').innerText(), /distort by about \d+ %/);
-  // The top is built symmetric: both pieces are symmetric about the centre.
-  assert.equal((await page.locator('#panel-table').innerText()).match(/\(symmetric\)/g).length, 2);
-  // One layout per sheet, with a materials list.
-  assert.equal(await page.locator('#materials-out img').count(), 2);
-  assert.match(await page.locator('#materials-out table').innerText(), /red 0\.40/);
-  // Construction: the assembly guide, the neckline's trim strip and the PDF.
-  const steps = await page.locator('#assembly li').allInnerTexts();
-  assert.ok(steps.some((s) => /^Fit the zip in the side/.test(s)), steps.join('\n'));
-  assert.ok(steps.some((s) => /^Hem the hem edge/.test(s)), steps.join('\n'));
-  assert.equal(await page.locator('#trims-out img').count(), 1);
-  const pdfHref = await page.locator('#downloads a', { hasText: 'pattern.pdf' }).getAttribute('href');
-  const pdfHead = await page.evaluate(async (u) => (await (await fetch(u)).text()).slice(0, 8), pdfHref);
-  assert.equal(pdfHead, '%PDF-1.4');
-  // Posing: the same pattern checked in a squat (body and garment shown in
-  // the pose; the report gains the pose's columns), then back to standing.
-  await page.selectOption('#pose', 'squat');
-  await page.waitForFunction(() => !fitting && !garmentBusy && !garmentAgain
-    && /flat pieces/.test(document.getElementById('g-status').textContent), null, { timeout: 90000 });
-  await page.click('#run');
-  await page.waitForFunction(
-    () => !document.getElementById('run').disabled && /Done|error/i.test(document.getElementById('status').textContent),
-    null, { timeout: 90000 });
-  assert.match(await page.textContent('#status'), /Done/);
-  assert.match(await page.locator('#panel-table').innerText(), /95 % σ squat/);
-  assert.ok(await page.isVisible('#pose-note'));
-  await page.selectOption('#pose', 'standing');
-  await page.waitForFunction(() => !fitting && !garmentBusy && !garmentAgain, null, { timeout: 90000 });
-  await tab('settings');
-  await page.fill('#length-relief', '100');
+  // 1. A fresh start drafts the sleeveless top for the typical figure.
+  await page.goto(url);
   await page.evaluate(() => localStorage.clear());
+  await page.reload();
+  await page.waitForFunction(() => design.pieces.length === 2);
+  await ready();
+  assert.match(await page.textContent('#g-status'), /Ready: 2 pieces, 2 seams/);
+  assert.equal(await page.locator('#g-warnings li').count(), 0);
+  assert.ok((await page.getAttribute('#m-bust', 'placeholder')).length > 0, 'estimates shown');
+  assert.ok(await page.evaluate(() => editor.guides.length > 8));
+  // The editor's curves are the pattern's: every edge length agrees with Rust.
+  const worst = await page.evaluate(async () => {
+    const r = await call({ command: 'check', design });
+    let w = 0;
+    design.pieces.forEach((p, i) => r.pieces[i].edges.forEach((e, k) => { w = Math.max(w, Math.abs(e.length - Geo.edgeLength(p, k))); }));
+    return w;
+  });
+  assert.ok(worst < 1e-6, `JS and Rust edge lengths differ by ${worst} mm`);
 
-  // 1. Quick torso from the default measurements, with heatmap and sheet layout.
+  // 2. New measurements redraft the design; undo goes back.
   await tab('body');
-  await choose(page, 'source', 'measure');
-  await tab('settings');
-  await page.selectOption('#heatmap', 'max_stretch');
-  await page.fill('#sheet-width', '1000');
-  await page.click('#run');
-  await done(page);
-  assert.match(await page.textContent('#status'), /Done .*6 panels/);
-  assert.equal(await page.locator('.piece img').count(), 6);
-  assert.equal(await page.locator('#warnings li').count(), 0);
-  assert.equal(await page.locator('#layout img').count(), 1);
+  await page.fill('#m-bust', '100');
+  await page.waitForFunction(() => design.block.body.measurements.bust === 1000, null, { timeout: 10000 });
+  const wider = await page.evaluate(() => Geo.edgeLength(design.pieces[0], 1));
+  await page.click('#editor');
+  await page.keyboard.press('Control+z');
+  assert.equal(await page.evaluate(() => design.block.body.measurements.bust), undefined);
+  assert.ok(await page.evaluate(() => Geo.edgeLength(design.pieces[0], 1)) !== wider);
+  await page.keyboard.press('Control+Shift+z');
+  assert.equal(await page.evaluate(() => design.block.body.measurements.bust), 1000);
+  // An impossible body is explained, not drafted.
+  await page.fill('#m-inseam', '150');
+  await page.waitForFunction(() => /inseam/.test(document.getElementById('body-status').textContent));
+  await page.fill('#m-inseam', '');
 
-  // 2. Invalid measurements give a readable error.
-  await tab('body');
-  await page.fill('#levels tbody tr:nth-child(2) td:nth-child(2) input', '900');
-  await page.click('#run');
-  await done(page);
-  assert.match(await page.textContent('#status'), /bottom to top/);
-
-  // 3. Uploaded mesh + seams with a swatch calibration.
-  await choose(page, 'source', 'upload');
-  await page.setInputFiles('#obj-file', 'tests/data/cap.obj');
-  await page.setInputFiles('#seams-file', 'tests/data/cap.ring.seams.json');
-  await page.selectOption('#up', '0,0,1');
-  await tab('settings');
-  await page.click('#calib-details summary');
-  await page.setInputFiles('#calib-file', 'tests/data/swatches.json');
-  await page.fill('#calib-sheet', '0.40mm black');
-  await page.click('#run');
-  await done(page);
-  assert.match(await page.textContent('#status'), /Done .*2 panels/);
-
-  // 4. Men's figure: typical measurements, a clean fit, and a template that
-  // builds on it.
-  await tab('body');
-  await choose(page, 'source', 'human');
-  await choose(page, 'figure', 'men');
-  await page.waitForFunction(() => /Fitted/.test(document.getElementById('fit-status').textContent), null, { timeout: 90000 });
-  assert.equal(await page.inputValue('#s-body_type'), '1');
-  assert.equal(await page.inputValue('#m-height'), '178');
-  assert.equal(await page.locator('#fit-warnings li').count(), 0);
+  // 3. Select a piece and an edge; the inspector edits them.
   await tab('garment');
-  await page.selectOption('#g-template', 'leggings');
-  await page.click('#g-example');
-  await page.waitForFunction(() => /2 flat pieces/.test(document.getElementById('g-status').textContent), null, { timeout: 90000 });
-  // Templates are built for the figure in use: the raglan top makes its
-  // four pieces on the men's figure too.
-  await page.selectOption('#g-template', 'top-raglan');
-  await page.click('#g-example');
-  await page.waitForFunction(() => /4 flat pieces/.test(document.getElementById('g-status').textContent), null, { timeout: 90000 });
+  const mid = await page.evaluate(() => {
+    const o = editor.geometry(design.pieces[1]).outline;
+    const xs = o.map((q) => q[0]), ys = o.map((q) => q[1]);
+    return [(Math.min(...xs) + Math.max(...xs)) / 2, (Math.min(...ys) + Math.max(...ys)) / 2];
+  });
+  await clickWorld(mid);
+  await page.waitForFunction(() => editor.sel && editor.sel.kind === 'piece' && editor.sel.piece === 'back');
+  await page.check('#inspector label.check input');
+  assert.equal(await page.evaluate(() => design.pieces[1].pair), true);
+  await clickWorld(await onEdge(0, 0, 0.5));   // the front hem
+  await page.waitForFunction(() => editor.sel && editor.sel.kind === 'edge');
+  assert.match(await page.textContent('#inspector'), /Edge of front/);
+  // Turn the front's arrow a quarter turn anticlockwise (up the body to the
+  // page's left), then undo.
+  const arrow = await page.evaluate(() => editor.arrow(design.pieces[0]));
+  const [hx, hy] = await screen(arrow.head);
+  const [cx, cy] = await screen(arrow.c);
+  await page.mouse.move(hx, hy);
+  await page.mouse.down();
+  await page.mouse.move(cx - Math.abs(hy - cy), cy, { steps: 6 });
+  await page.mouse.up();
+  assert.equal(await page.evaluate(() => design.pieces[0].up_deg), 90);
+  await page.keyboard.press('Control+z');
+  assert.equal(await page.evaluate(() => design.pieces[0].up_deg), undefined);
 
-  // 5. On a phone: one screen at a time from the bottom bar; nothing wider
-  // than the screen, tap-for-help, pinch to zoom, double-tap to reset, tap
-  // to add a point, and the pattern made (which shows the Pattern screen).
-  const phone = await browser.newContext({ ...devices['iPhone 13'] });
-  const m = await phone.newPage();
-  m.on('pageerror', (e) => errors.push(e.message));
-  m.on('dialog', (d) => d.accept());
-  await m.goto(url);
-  await m.evaluate(() => localStorage.clear());
-  await m.reload();
-  await m.waitForFunction(() => /Fitted/.test(document.getElementById('fit-status').textContent), null, { timeout: 90000 });
-  const fits = () => m.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
-  const screen = (name) => m.tap(`.mobilebar button[data-pane="${name}"]`);
-  assert.ok(await fits(), 'page wider than the phone');
-  assert.equal(await m.evaluate(() => document.body.dataset.screen), '3d');
-  await screen('body');
-  await m.tap('#measure-inputs label span >> text=Waist height');
-  assert.match(await m.textContent('#measure-hint'), /Waist height: /);
-  await m.waitForFunction(() => document.querySelectorAll('#g-template option').length >= 8);
-  await screen('garment');
-  await m.tap('#g-example');
-  await m.waitForFunction(() => /2 flat pieces/.test(document.getElementById('g-status').textContent), null, { timeout: 90000 });
-  await screen('3d');
-  const vb = await m.locator('#viewer').boundingBox();
-  const cx = vb.x + vb.width / 2, cy = vb.y + vb.height / 2;
-  const zoom0 = await m.evaluate(() => viewer.zoom);
-  await m.evaluate(([x, y]) => {
-    const c = document.getElementById('viewer');
-    const ev = (type, id, dx) => c.dispatchEvent(new PointerEvent(type, { pointerId: id, pointerType: 'touch', clientX: x + dx, clientY: y, bubbles: true }));
-    ev('pointerdown', 11, -20); ev('pointerdown', 12, 20);
-    for (let k = 1; k <= 5; k++) { ev('pointermove', 11, -20 - 10 * k); ev('pointermove', 12, 20 + 10 * k); }
-    ev('pointerup', 11, -70); ev('pointerup', 12, 70);
-  }, [cx, cy]);
-  assert.ok(await m.evaluate(() => viewer.zoom) < 0.5 * zoom0, 'pinching out zooms in');
-  await m.evaluate(([x, y]) => {
-    const c = document.getElementById('viewer');
-    for (let k = 0; k < 2; k++) {
-      c.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 20 + k, pointerType: 'touch', clientX: x, clientY: y, bubbles: true }));
-      c.dispatchEvent(new PointerEvent('pointerup', { pointerId: 20 + k, pointerType: 'touch', clientX: x, clientY: y, bubbles: true }));
-    }
-  }, [cx, cy]);
-  assert.equal(await m.evaluate(() => viewer.zoom), 1, 'double-tap resets the view');
-  await m.tap('#g-new-seam');
-  const vb2 = await m.locator('#viewer').boundingBox();
-  await m.tap('#viewer', { position: { x: vb2.width * 0.5, y: vb2.height * 0.42 } });
-  await m.waitForFunction(() => /1 point/.test(document.getElementById('g-curves').textContent), null, { timeout: 30000 });
-  await m.tap('#g-delete');
-  await m.tap('#run');
-  await m.waitForFunction(() => /Done|error/i.test(document.getElementById('status').textContent), null, { timeout: 120000 });
-  assert.match(await m.textContent('#status'), /Done .*2 panels/);
-  assert.equal(await m.evaluate(() => document.body.dataset.screen), 'pattern');
-  assert.equal(await m.locator('.piece img').count(), 2);
-  assert.ok(await fits(), 'results wider than the phone');
-  await phone.close();
+  // 4. Drag a point: select the front, then move its centre neck point down.
+  const neck = await page.evaluate(() => {
+    const p = design.pieces[0];
+    const n = p.nodes.find((x) => x.id === 'front-centre-neck');
+    return [n.x + p.at[0], n.y + p.at[1]];
+  });
+  await clickWorld(mid.map((v, i) => (i ? v : v - 400)).map((v) => v));  // background: deselect
+  await clickWorld(await page.evaluate(() => { const o = editor.geometry(design.pieces[0]).outline; return [o[0][0] + 40, o[0][1] + 60]; }));
+  const [nx, ny] = await screen(neck);
+  await page.mouse.move(nx, ny);
+  await page.mouse.down();
+  await page.mouse.move(nx, ny + 30, { steps: 5 });
+  await page.mouse.up();
+  const moved = await page.evaluate(() => design.pieces[0].nodes.find((x) => x.id === 'front-centre-neck').y);
+  assert.ok(moved < neck[1] - 10, `neck moved: ${moved} vs ${neck[1]}`);
+
+  // 5. Split the back with a seam, then make the pattern.
+  await page.click('[data-tool="split"]');
+  await clickWorld(await onEdge(1, 0, 0.5));   // back hem
+  await clickWorld(await onEdge(1, 4, 0.5));   // back neckline
+  await page.waitForFunction(() => design.pieces.length === 3 && design.seams.length === 3);
+  await ready();
+  assert.equal(await page.locator('#g-warnings li').count(), 0, await page.textContent('#g-warnings'));
+  await page.click('#run');
+  await made();
+  assert.match(await page.textContent('#status'), /Done/, await page.textContent('#status'));
+  assert.equal(await page.locator('#pieces .piece').count(), 3);
+  assert.ok(await page.locator('#downloads a', { hasText: 'pattern.pdf' }).count() === 1);
+  assert.ok((await page.locator('#assembly li').count()) >= 4);
+
+  // The part split off still follows the measurements.
+  const before = await page.evaluate(() => JSON.stringify(design.pieces[2].nodes));
+  await tab('body');
+  await page.fill('#m-hips', '110');
+  await page.waitForFunction(() => design.block.body.measurements.hips === 1100, null, { timeout: 10000 });
+  assert.notEqual(await page.evaluate(() => JSON.stringify(design.pieces[2].nodes)), before);
+  await page.fill('#m-hips', '');
+  await page.waitForFunction(() => design.block.body.measurements.hips === undefined, null, { timeout: 10000 });
+  await tab('garment');
+
+  // 6. Draw a new piece: a triangle.
+  await page.evaluate(() => editor.zoomAt([0, 0], 0.5));
+  const box = await page.locator('#editor').boundingBox();
+  await page.click('[data-tool="draw"]');
+  for (const [x, y] of [[30, 40], [150, 40], [90, 130], [30, 40]]) await page.mouse.click(box.x + x, box.y + y);
+  await page.waitForFunction(() => design.pieces.length === 4);
+  await page.keyboard.press('Delete');
+  await page.waitForFunction(() => design.pieces.length === 3);
+
+  // 7. Join two edges with a seam, then delete it.
+  await page.click('#fit');
+  await page.click('[data-tool="seam"]');
+  await clickWorld(await onEdge(0, 0, 0.3));
+  await clickWorld(await onEdge(1, 0, 0.5));
+  await page.waitForFunction(() => design.seams.length === 4);
+  await page.keyboard.press('Delete');
+  await page.waitForFunction(() => design.seams.length === 3);
+
+  // 8. The project is kept in the browser.
+  await page.reload();
+  await page.waitForFunction(() => design.pieces.length === 3);
+  assert.equal(await page.inputValue('#m-bust'), '100');
+
+  // 9. Another template, and its pattern with a sheet layout.
+  await tab('garment');
+  await page.waitForFunction(() => document.querySelectorAll('#g-template option').length >= 7);
+  await page.selectOption('#g-template', 'catsuit-sleeves');
+  await page.click('#g-start');
+  await page.waitForFunction(() => design.pieces.length === 3 && design.pieces[2].id === 'sleeve');
+  await tab('settings');
+  await page.fill('#sheet-width', '1200');
+  await page.press('#sheet-width', 'Tab');
+  await page.click('#run');
+  await made();
+  assert.match(await page.textContent('#status'), /Done/);
+  assert.equal(await page.locator('#warnings li').count(), 0, await page.textContent('#warnings'));
+  assert.match(await page.textContent('#layout'), /Layout/);
+
+  // 10. A project from the 3D editor keeps its measurements.
+  await page.setInputFiles('#project-open', {
+    name: 'old.latexpat.json', mimeType: 'application/json',
+    buffer: Buffer.from(JSON.stringify({ version: 1, name: 'Old', body: { measurements: { height: 1750, bust: 960 }, shape: { body_type: 1 } }, garment: { curves: [] } })),
+  });
+  await page.waitForFunction(() => /3D editor/.test(document.getElementById('status').textContent));
+  assert.equal(await page.inputValue('#m-height'), '175');
+  assert.equal(await page.evaluate(() => readBody().figure), 'men');
+  assert.equal(await page.evaluate(() => design.pieces.length), 0);
+
+  assert.deepEqual(errors, []);
+
+  // 11. Phone: one screen at a time.
+  const phone = await browser.newPage({ ...devices['iPhone 13'] });
+  phone.on('pageerror', (e) => errors.push(String(e)));
+  await phone.goto(url);
+  await phone.evaluate(() => localStorage.clear());
+  await phone.reload();
+  await phone.waitForFunction(() => design.pieces.length === 2);
+  assert.ok(await phone.isVisible('#editor'));
+  await phone.click('.mobilebar button[data-pane="body"]');
+  assert.ok(await phone.isVisible('#m-bust'));
+  assert.ok(!(await phone.isVisible('#editor')));
+  await phone.click('#run');
+  await phone.waitForFunction(() => document.body.dataset.screen === 'pattern', null, { timeout: 60000 });
+  assert.equal(await phone.locator('#pieces .piece').count(), 2);
 
   assert.deepEqual(errors, []);
   await browser.close();
-  console.log('web smoke test passed');
+  console.log('smoke test passed');
 })().catch((e) => { console.error(e); process.exit(1); });

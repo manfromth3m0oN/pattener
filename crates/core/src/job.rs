@@ -1,200 +1,123 @@
-//! One-call pattern job: mesh + seams + options → SVG documents and a
-//! report.
+//! One-call pattern job: a flat design and options in, SVG documents, a
+//! printable PDF and a report out.
 //!
 //! This is the orchestration shared by the command-line tool and the web
-//! UI: it resolves the ease (uniform or from a swatch calibration),
-//! flattens and matches seams, builds pattern pieces, renders SVGs,
-//! optionally lays the pieces out on a sheet, and collects warnings. It
-//! returns strings and plain data only; callers decide where they go.
+//! app: it works out each piece's ease (uniform, from its latex sheet or
+//! from a swatch calibration), builds the pattern pieces, checks that the
+//! seams match, renders the pieces, lays them out on the sheets, writes the
+//! assembly guide and collects warnings. It returns strings and plain data
+//! only; callers decide where they go.
 
 use crate::allowance::polygon_area;
-use crate::arap::ArapOptions;
 use crate::assembly::assembly_steps;
 use crate::calibrate::{calibrate, Calibration, CalibrationResult};
-use crate::cut::cut_panels;
-use crate::ease::{apply_zones, Ease, EaseZone};
+use crate::design::{Design, SeamFinish};
 use crate::error::{Error, Result};
-use crate::fitmap::{pressure_map, FitMap, Material};
-use crate::flatten::{flatten_garment, FlatPanel, FlattenOptions, SeamMatching, SeamReport};
-use crate::materials::{MaterialPlan, MaterialUse, DEFAULT_SHEAR_MODULUS_MPA};
-use crate::mesh::Mesh;
+use crate::geom::bounds;
+use crate::materials::{MaterialUse, Sheet};
 use crate::nest::{nest, NestOptions, Placement};
-use crate::pattern::{build_pattern, trim_strips, EdgeSpec, PatternOptions, TrimStrip};
+use crate::pattern::{
+    build_pattern, trim_strips, PatternOptions, PatternPiece, Reduction, TrimStrip,
+};
 use crate::pdf::{pattern_pdf, piece_drawing, trim_drawing, PrintOptions};
-use crate::seams::SeamSet;
-use crate::svg::{layout_svg, panel_svg, trim_svg, EdgeLabel, HeatmapMetric, SvgOptions};
-use glam::{DVec2, DVec3};
+use crate::svg::{layout_svg, piece_svg, trim_svg};
+use glam::DVec2;
 
-/// Pressure (mmHg) above which 5 % of a piece triggers a warning: the
-/// start of the strongest medical compression class (about 34–46 mmHg).
-const HIGH_PRESSURE_MMHG: f64 = 40.0;
-
-/// How the ease is chosen.
+/// How the ease is chosen when a piece's sheet does not set it.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
 pub enum EaseSpec {
-    /// The same ease for every panel.
+    /// The same ease for every piece.
     Uniform(f64),
-    /// From swatch tests: `sheet` for every panel, except panels listed in
-    /// `panel_sheets` as `(panel index, sheet)`. A sheet is a name from the
-    /// calibration or a thickness such as `"0.5mm"` (pooled fit).
+    /// From swatch tests. Each piece's sheet is looked up in the
+    /// calibration by name, then by thickness; `sheet` (a name from the
+    /// calibration or a thickness such as `"0.5mm"`) is used otherwise.
     Calibrated {
         calibration: Calibration,
         sheet: String,
-        #[cfg_attr(feature = "serde", serde(default))]
-        panel_sheets: Vec<(usize, String)>,
     },
 }
 
-/// Everything a pattern job needs besides the mesh and seams.
+/// Everything a pattern job needs besides the design.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(default))]
 pub struct JobOptions {
     pub ease: EaseSpec,
-    pub arap: ArapOptions,
-    /// Body axis that points up the page.
-    pub up: DVec3,
-    /// `None` to keep each panel's independent flattening.
-    pub seam_matching: Option<SeamMatching>,
-    /// Warn when a seam's sides still differ by more than this (mm).
+    /// Share of the reduction applied along the body (1 = the same as
+    /// around it; 0.3–0.5 is typical for latex).
+    pub length_relief: f64,
+    /// Warn when a seam's sides differ by more than this (mm).
     pub seam_tolerance: f64,
     pub pattern: PatternOptions,
-    pub heatmap: Option<HeatmapMetric>,
-    pub heatmap_range: f64,
-    /// Lay pieces out on a sheet.
+    /// Also lay every piece out on one sheet of this width.
     pub sheet: Option<NestOptions>,
-    /// Fraction of the around-the-body reduction applied along the body
-    /// (1 = the same in both directions; 0.3–0.5 is typical for latex).
-    pub length_relief: f64,
-    /// "Along the body" per mesh triangle (set by callers that know the
-    /// body, e.g. from its bones); `None` uses `up`.
-    #[cfg_attr(feature = "serde", serde(skip))]
-    pub along: Option<Vec<DVec3>>,
-    /// Regions with their own ease (see [`EaseZone`]).
-    pub ease_zones: Vec<EaseZone>,
-    /// Latex used for the pressure map when no calibration is given.
-    pub material: Material,
-    /// Which sheet each panel is cut from (overrides per-panel ease and
-    /// stiffness, and lays each sheet out on its own roll).
-    pub materials: Option<MaterialPlan>,
-    /// Finishes of the garment's open edges (hems, trims).
-    pub edges: Vec<EdgeSpec>,
     /// Also produce a tiled print-at-home PDF.
     pub print: Option<PrintOptions>,
-    /// Outline smoothing scale `σ` (mm; see [`crate::outline`]); 0 keeps
-    /// outlines as flattened.
-    pub outline_smoothing_mm: f64,
-    /// Smooth the body shape over this scale `σ` (mm; see
-    /// [`crate::smoothing`]) before flattening; 0 flattens it as given.
-    pub body_smoothing_mm: f64,
-    /// Mirror image of each mesh vertex for a symmetric garment (from
-    /// [`garment::build`](crate::garment::build)): mirror-image pieces
-    /// come out as exact mirror images.
-    #[cfg_attr(feature = "serde", serde(skip))]
-    pub mirror: Option<Vec<u32>>,
-    /// The mesh's vertices in another pose (same order), e.g. from
-    /// [`human::pose`](crate::human::pose): the pattern is still drafted on
-    /// `mesh`, then its stretch and pressure are also evaluated in this pose.
-    #[cfg_attr(feature = "serde", serde(skip))]
-    pub posed: Option<Vec<DVec3>>,
+    /// The latex sheets: each is laid out on its own roll.
+    pub materials: Vec<Sheet>,
+    /// Sheet for pieces that do not name one (default: the first).
+    pub default_sheet: Option<String>,
 }
 
 impl Default for JobOptions {
     fn default() -> Self {
         Self {
             ease: EaseSpec::Uniform(0.85),
-            arap: ArapOptions::default(),
-            up: DVec3::Y,
-            seam_matching: Some(SeamMatching::default()),
+            length_relief: 1.0,
             seam_tolerance: 1.0,
             pattern: PatternOptions::default(),
-            heatmap: None,
-            heatmap_range: 1.5,
             sheet: None,
-            length_relief: 1.0,
-            along: None,
-            ease_zones: Vec::new(),
-            material: Material::default(),
-            materials: None,
-            edges: Vec::new(),
             print: None,
-            outline_smoothing_mm: crate::flatten::DEFAULT_OUTLINE_SMOOTHING_MM,
-            body_smoothing_mm: crate::flatten::DEFAULT_BODY_SMOOTHING_MM,
-            mirror: None,
-            posed: None,
+            materials: Vec::new(),
+            default_sheet: None,
         }
     }
 }
 
-/// Per-panel summary.
+/// Per-piece summary.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct PanelReport {
+pub struct PieceReport {
     pub index: usize,
+    pub name: String,
     pub file: String,
-    /// For a symmetric garment: the piece this one is the mirror image of
-    /// (its own index for a piece that is symmetric itself).
-    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
-    pub mirror_of: Option<usize>,
-    /// Misfit of the piece's worst patch: how far, around the place it
-    /// strains most, it is from the shape the ease asks for (see
-    /// [`crate::hints`]; 0.1 ≈ 10 %).
-    pub strain_spread: f64,
-    /// For a piece that strains (spread above
-    /// [`SPREAD_HINT`](crate::hints::SPREAD_HINT)): the point on the
-    /// body (mesh coordinates, mm) a dart or seam should run towards.
-    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
-    pub strain_hint: Option<[f64; 3]>,
-    /// With [`JobOptions::posed`]: the piece's 95th-percentile stretch and
-    /// pressure in that pose.
-    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
-    pub posed_p95_stretch: Option<f64>,
-    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
-    pub posed_p95_pressure_mmhg: Option<f64>,
+    /// How to cut it.
+    pub cut: String,
+    /// Number of pieces to cut (2 for a pair).
+    pub copies: usize,
+    pub folded: bool,
     pub sheet: Option<String>,
+    /// Reduction around the body (the ease) and along it.
     pub ease: f64,
+    pub ease_along: f64,
     pub seams: Vec<String>,
-    pub vertices: usize,
-    pub triangles: usize,
-    pub min_stretch: f64,
-    pub max_stretch: f64,
-    /// 95 % of the piece's area stretches less than this.
-    pub p95_stretch: f64,
-    /// Fraction of the piece's area that is slack in some direction.
-    pub slack_fraction: f64,
-    /// Mean pressure on the body (mmHg).
-    pub mean_pressure_mmhg: f64,
-    /// 95 % of the piece's area presses less than this (mmHg).
-    pub p95_pressure_mmhg: f64,
-    /// Fraction of the piece's area that bridges over a hollow.
-    pub bridging_fraction: f64,
-    pub mean_area_stretch: f64,
+    pub notches: Vec<u32>,
     pub body_area_mm2: f64,
     pub flat_area_mm2: f64,
     pub flat_width_mm: f64,
     pub flat_height_mm: f64,
     pub cut_width_mm: f64,
     pub cut_height_mm: f64,
-    pub notches: Vec<u32>,
-    pub flipped_triangles: Vec<u32>,
-    pub arap_iterations: usize,
 }
 
-/// Per-seam-pair summary.
+/// Per-seam summary: the lengths of its two sides.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct SeamPairReport {
+pub struct SeamReport {
     pub seam: String,
-    pub left_panel: usize,
-    pub right_panel: usize,
-    pub edges: usize,
-    pub body_length_mm: f64,
-    pub left_length_mm: f64,
-    pub right_length_mm: f64,
+    pub zip: bool,
+    pub a_piece: usize,
+    pub b_piece: usize,
+    /// Body-size lengths of side a and side b (mm).
+    pub a_body_mm: f64,
+    pub b_body_mm: f64,
+    /// Flat (reduced) lengths (mm).
+    pub a_flat_mm: f64,
+    pub b_flat_mm: f64,
+    /// `a_flat − b_flat` (mm).
     pub mismatch_mm: f64,
-    pub mismatch_before_matching_mm: f64,
 }
 
 /// Sheet layout summary.
@@ -213,10 +136,10 @@ pub struct LayoutReport {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Report {
     pub calibration: Option<CalibrationResult>,
-    pub panels: Vec<PanelReport>,
-    pub seams: Vec<SeamPairReport>,
+    pub pieces: Vec<PieceReport>,
+    pub seams: Vec<SeamReport>,
     pub layout: Option<LayoutReport>,
-    /// Use of each sheet of the material plan.
+    /// Use of each latex sheet.
     pub materials: Vec<MaterialUse>,
     /// Trim strips to cut (SVGs `trim_NN.svg`, in this order).
     pub trims: Vec<TrimStrip>,
@@ -229,12 +152,11 @@ pub struct Report {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct JobOutput {
     pub report: Report,
-    /// One SVG document per panel, named by `report.panels[i].file`.
-    pub panel_svgs: Vec<String>,
-    /// Sheet layout SVG, if a sheet was given.
+    /// One SVG document per piece, named by `report.pieces[i].file`.
+    pub piece_svgs: Vec<String>,
+    /// Layout of every piece on one sheet, if [`JobOptions::sheet`] was set.
     pub layout_svg: Option<String>,
-    /// One layout per sheet of the material plan, parallel to
-    /// `report.materials`.
+    /// One layout per latex sheet used, parallel to `report.materials`.
     pub material_layouts: Vec<String>,
     /// One SVG per trim strip, parallel to `report.trims`.
     pub trim_svgs: Vec<String>,
@@ -242,37 +164,43 @@ pub struct JobOutput {
     pub pdf: Option<String>,
     /// Human-readable warnings.
     pub warnings: Vec<String>,
-    /// Pressure and bridging map on the input mesh.
-    pub fit: FitMap,
-    /// The same in the pose of [`JobOptions::posed`], on the posed mesh.
-    pub posed_fit: Option<FitMap>,
+}
+
+/// A piece's cut outline and, for a pair, its mirror image, with labels.
+fn cut_copies(p: &PatternPiece) -> Vec<(Vec<DVec2>, String)> {
+    let mut out = vec![(p.cut_outline.clone(), p.name.clone())];
+    if p.pair {
+        let mut m: Vec<DVec2> = p
+            .cut_outline
+            .iter()
+            .map(|q| DVec2::new(-q.x, q.y))
+            .collect();
+        m.reverse();
+        out.push((m, format!("{} (mirrored)", p.name)));
+    }
+    out
 }
 
 /// Run a complete pattern job.
-pub fn run(mesh: &Mesh, seams: &SeamSet, opts: &JobOptions) -> Result<JobOutput> {
-    if !(opts.heatmap_range > 1.0) {
-        return Err(Error::InvalidEase(
-            "heatmap range must be greater than 1".into(),
-        ));
+pub fn run(design: &Design, opts: &JobOptions) -> Result<JobOutput> {
+    if !(0.0..=1.0).contains(&opts.length_relief) {
+        return Err(Error::InvalidEase(format!(
+            "the lengthwise share of the reduction must be between 0 and 1, got {}",
+            opts.length_relief
+        )));
     }
     let mut warnings = Vec::new();
+    for s in &opts.materials {
+        s.validate()?;
+    }
 
-    // Ease and stiffness per panel.
-    let n_panels = cut_panels(mesh, &seams.resolve(mesh)?)?.len();
+    // The ease when a sheet does not give its own.
     let mut calibration = None;
-    let (mut ease, mut stiffness, mut panel_sheets) = match &opts.ease {
-        EaseSpec::Uniform(e) => {
-            if !(*e > 0.0 && e.is_finite()) {
-                return Err(Error::InvalidEase(format!(
-                    "ease must be positive, got {e}"
-                )));
-            }
-            (Ease::Uniform(*e), None, vec![(*e, None); n_panels])
-        }
+    let base_ease = match &opts.ease {
+        EaseSpec::Uniform(e) => *e,
         EaseSpec::Calibrated {
             calibration: c,
             sheet,
-            panel_sheets,
         } => {
             let r = calibrate(c)?;
             for s in &r.sheets {
@@ -284,290 +212,207 @@ pub fn run(mesh: &Mesh, seams: &SeamSet, opts: &JobOptions) -> Result<JobOutput>
                     ));
                 }
             }
-            let mut specs = vec![sheet.clone(); n_panels];
-            for (i, name) in panel_sheets {
-                if *i >= n_panels {
-                    return Err(Error::Calibration(format!(
-                        "panel {i} does not exist (the seams make {n_panels} panels)"
-                    )));
-                }
-                specs[*i] = name.clone();
-            }
-            let mut eases = Vec::new();
-            let mut k = Vec::new();
-            let mut info = Vec::new();
-            for spec in &specs {
-                let (e, stiff, label) = r.resolve(spec)?;
-                eases.push(e);
-                k.push(stiff);
-                info.push((e, Some(label)));
-            }
+            let e = r.resolve(sheet)?.0;
             calibration = Some(r);
-            (Ease::per_panel(mesh, seams, &eases)?, Some(k), info)
+            e
         }
     };
-
-    // Sheets from the material plan override the per-panel ease and
-    // stiffness: the sheet's own ease, else its calibration (by name, then
-    // by thickness), else the job's ease.
-    if let Some(plan) = &opts.materials {
-        plan.validate(n_panels)?;
-        let mut eases = Vec::with_capacity(n_panels);
-        let mut k = Vec::with_capacity(n_panels);
-        let mut info = Vec::with_capacity(n_panels);
-        for &si in &plan.panel_sheet {
-            let sheet = &plan.sheets[si];
-            let calibrated = calibration.as_ref().and_then(|r| {
-                r.resolve(&sheet.name)
-                    .or_else(|_| r.resolve(&format!("{}mm", sheet.thickness_mm)))
-                    .ok()
-            });
-            let e = match (sheet.ease, &calibrated, &opts.ease) {
-                (Some(e), _, _) => e,
-                (None, Some((e, _, _)), _) => *e,
-                (None, None, EaseSpec::Uniform(e)) => *e,
-                (None, None, EaseSpec::Calibrated { .. }) => {
-                    unreachable!("calibration resolves thicknesses")
-                }
-            };
-            let stiff = match (sheet.shear_modulus_mpa, &calibrated) {
-                (Some(mu), _) => mu * sheet.thickness_mm,
-                (None, Some((_, k, _))) => *k,
-                (None, None) => DEFAULT_SHEAR_MODULUS_MPA * sheet.thickness_mm,
-            };
-            eases.push(e);
-            k.push(stiff);
-            info.push((e, Some(sheet.name.clone())));
-        }
-        ease = Ease::per_panel(mesh, seams, &eases)?;
-        stiffness = Some(k);
-        panel_sheets = info;
+    if !(base_ease > 0.3 && base_ease <= 1.2) {
+        return Err(Error::InvalidEase(format!(
+            "ease must be between 0.3 and 1.2, got {base_ease}"
+        )));
     }
 
-    let ease = if opts.ease_zones.is_empty() {
-        ease
-    } else {
-        apply_zones(mesh, &ease, &opts.ease_zones)?
-    };
-    // Membrane stiffness per panel for the pressure map.
-    let pressure_k: Vec<f64> = stiffness
-        .clone()
-        .unwrap_or_else(|| vec![opts.material.stiffness(); n_panels]);
-
-    let fopts = FlattenOptions {
-        ease,
-        arap: opts.arap,
-        up: opts.up,
-        seam_matching: opts.seam_matching,
-        panel_stiffness: stiffness,
-        length_relief: opts.length_relief,
-        along: opts.along.clone(),
-        outline_smoothing_mm: opts.outline_smoothing_mm,
-        body_smoothing_mm: opts.body_smoothing_mm,
-        mirror: opts.mirror.clone(),
-    };
-    let garment = flatten_garment(mesh, seams, &fopts)?;
-    let fit = pressure_map(mesh, &garment, &pressure_k);
-    // The same pattern on the body in another pose: the flat pieces are
-    // unchanged; their 3D positions follow the pose.
-    let posed = match &opts.posed {
-        Some(p) if p.len() == mesh.positions().len() => {
-            let posed_mesh = Mesh::new(p.clone(), mesh.triangles().to_vec())?;
-            let mut posed_garment = garment.clone();
-            for fp in &mut posed_garment.panels {
-                for (q, &o) in fp.panel.positions.iter_mut().zip(&fp.panel.vertex_origin) {
-                    *q = p[o as usize];
-                }
-                fp.strain = crate::strain::measure(&fp.panel, &fp.uv);
-            }
-            let posed_fit = pressure_map(&posed_mesh, &posed_garment, &pressure_k);
-            Some((posed_garment, posed_fit))
-        }
-        Some(_) => {
-            return Err(Error::Body(
-                "the posed positions do not match the mesh".into(),
-            ))
-        }
-        None => None,
-    };
-    let pieces = build_pattern(&garment, seams, &opts.pattern, &opts.edges);
-    let trims = trim_strips(&garment, &opts.edges);
-
-    let mut report = Report {
-        calibration,
-        panels: vec![],
-        seams: vec![],
-        layout: None,
-        materials: vec![],
-        trims: trims.clone(),
-        assembly: assembly_steps(&garment, &pieces, seams, &opts.edges, &trims),
-    };
-    // Where pieces strain (see `hints`).
-    let patches: Vec<(f64, u32)> = garment
-        .panels
-        .iter()
-        .zip(&garment.area_misfit)
-        .map(|(fp, m)| crate::hints::worst_patch(fp, m))
-        .collect();
-    let spreads: Vec<f64> = patches.iter().map(|p| p.0).collect();
-    let hints: Vec<Option<[f64; 3]>> = garment
-        .panels
-        .iter()
-        .zip(&patches)
-        .map(|(fp, &(s, v))| {
-            if s <= crate::hints::SPREAD_HINT {
-                return None;
-            }
-            let p = mesh.positions()[fp.panel.vertex_origin[v as usize] as usize];
-            Some([p.x, p.y, p.z])
-        })
-        .collect();
-    for (i, (h, &s)) in hints.iter().zip(&spreads).enumerate() {
-        // One warning per mirror-image pair.
-        let Some(h) = h else {
-            continue;
-        };
-        if garment.mirrored[i].is_some_and(|j| j < i) {
-            continue;
-        }
-        let pair = match garment.mirrored[i] {
-            Some(j) if j != i => format!("pieces {i} and {j} have"),
-            _ => format!("piece {i} has"),
-        };
-        warnings.push(format!(
-            "{pair} to distort by about {:.0} % to lie flat around ({:.0}, {:.0}, {:.0}) mm, \
-             where the body curves both ways: a dart or seam from the nearest edge towards it \
-             (or, at an armpit, a set-in sleeve) would let it lie flatter",
-            100.0 * s,
-            h[0],
-            h[1],
-            h[2]
-        ));
-    }
-    let mut panel_svgs = Vec::new();
-    let mut titles = Vec::new();
-    for (i, fp) in garment.panels.iter().enumerate() {
-        let names = seam_names(fp, seams);
-        let mut label = if names.is_empty() {
-            format!("panel {i}")
+    // Each piece's sheet and ease.
+    let default_sheet = opts
+        .default_sheet
+        .as_ref()
+        .and_then(|n| opts.materials.iter().position(|s| &s.name == n))
+        .unwrap_or(0);
+    let mut piece_sheet: Vec<Option<usize>> = Vec::new();
+    let mut eases = Vec::new();
+    for p in &design.pieces {
+        let si = if opts.materials.is_empty() {
+            None
         } else {
-            format!("panel {i} — {}", names.join(", "))
+            match &p.sheet {
+                Some(name) => match opts.materials.iter().position(|s| &s.name == name) {
+                    Some(i) => Some(i),
+                    None => {
+                        warnings.push(format!(
+                            "piece '{}' uses sheet '{name}', which is not in the list; it is cut from '{}'",
+                            p.name, opts.materials[default_sheet].name
+                        ));
+                        Some(default_sheet)
+                    }
+                },
+                None => Some(default_sheet),
+            }
         };
-        match garment.mirrored[i] {
-            Some(j) if j == i => label.push_str(" (symmetric)"),
-            Some(j) => label.push_str(&format!(" (mirror image of panel {j})")),
-            None => {}
-        }
-        panel_svgs.push(panel_svg(
-            fp,
-            &pieces[i],
-            &SvgOptions {
-                heatmap: opts.heatmap,
-                range: opts.heatmap_range,
-                label: Some(label.clone()),
-                edge_labels: edge_labels(i, &garment.seams, seams),
-                ..Default::default()
-            },
-        ));
-        titles.push(label);
-        let size = fp.uv.iter().fold(DVec2::ZERO, |m, p| m.max(*p));
-        let cut_size = {
-            let o = &pieces[i].cut_outline;
-            let lo = o.iter().fold(DVec2::splat(f64::INFINITY), |m, p| m.min(*p));
-            o.iter().fold(DVec2::ZERO, |m, p| m.max(*p - lo))
-        };
-        let s = &fp.strain;
-        if !pieces[i].cut_outline_simple {
-            warnings.push(format!(
-                "panel {i}: the allowance makes the cut line cross itself \
-                 (an edge curves inwards more tightly than the allowance); check the SVG"
-            ));
-        }
-        let pf = fit.panels[i];
-        if pf.p95_pressure_mmhg > HIGH_PRESSURE_MMHG {
-            warnings.push(format!(
-                "panel {i} presses hard: 5 % of it exceeds {:.0} mmHg; loosen the ease there (an ease zone) \
-                 or use thinner latex",
-                pf.p95_pressure_mmhg
-            ));
-        }
-        if !s.flipped.is_empty() {
-            warnings.push(format!(
-                "panel {i} has {} flipped triangle(s) in the flat layout",
-                s.flipped.len()
-            ));
-        }
-        report.panels.push(PanelReport {
-            index: i,
-            file: format!("panel_{i:02}.svg"),
-            mirror_of: garment.mirrored[i],
-            posed_p95_stretch: posed.as_ref().map(|(g, _)| g.panels[i].strain.p95_stretch),
-            posed_p95_pressure_mmhg: posed.as_ref().map(|(_, f)| f.panels[i].p95_pressure_mmhg),
-            strain_spread: spreads[i],
-            strain_hint: hints[i],
-            sheet: panel_sheets[i].1.clone(),
-            ease: panel_sheets[i].0,
-            seams: names,
-            vertices: fp.panel.vertex_count(),
-            triangles: fp.panel.triangles.len(),
-            min_stretch: s.min_stretch,
-            max_stretch: s.max_stretch,
-            p95_stretch: s.p95_stretch,
-            slack_fraction: s.slack_fraction,
-            mean_pressure_mmhg: pf.mean_pressure_mmhg,
-            p95_pressure_mmhg: pf.p95_pressure_mmhg,
-            bridging_fraction: pf.bridging_fraction,
-            mean_area_stretch: s.mean_area_stretch,
-            body_area_mm2: s.body_area,
-            flat_area_mm2: s.flat_area,
-            flat_width_mm: size.x,
-            flat_height_mm: size.y,
-            cut_width_mm: cut_size.x,
-            cut_height_mm: cut_size.y,
-            notches: pieces[i].notches.iter().map(|n| n.number).collect(),
-            flipped_triangles: s.flipped.clone(),
-            arap_iterations: fp.arap_iterations,
-        });
+        let ease = si
+            .map(|i| &opts.materials[i])
+            .and_then(|s| {
+                s.ease.or_else(|| {
+                    let r = calibration.as_ref()?;
+                    r.resolve(&s.name)
+                        .or_else(|_| r.resolve(&format!("{}mm", s.thickness_mm)))
+                        .ok()
+                        .map(|x| x.0)
+                })
+            })
+            .unwrap_or(base_ease);
+        piece_sheet.push(si);
+        eases.push(ease);
     }
+    let reductions: Vec<Reduction> = eases
+        .iter()
+        .zip(&design.pieces)
+        .map(|(&e, p)| Reduction::new(e, opts.length_relief).up_deg(p.up_deg))
+        .collect();
 
-    for sr in &garment.seams {
-        let (l, r) = (sr.pair.left.panel, sr.pair.right.panel);
-        let name = seam_name(seams, sr.pair.seam);
-        if sr.lengths.mismatch().abs() > opts.seam_tolerance {
+    let pieces = build_pattern(design, &reductions, &opts.pattern)?;
+    let trims = trim_strips(design, &pieces);
+    let assembly = assembly_steps(design, &pieces, opts.pattern.seam_allowance, &trims);
+
+    // Seams.
+    let mut seams = Vec::new();
+    for s in &design.seams {
+        let (a, b) = (design.resolve(&s.a).unwrap(), design.resolve(&s.b).unwrap());
+        let r = SeamReport {
+            seam: if s.name.is_empty() {
+                s.id.clone()
+            } else {
+                s.name.clone()
+            },
+            zip: s.finish == SeamFinish::Zip,
+            a_piece: a.0,
+            b_piece: b.0,
+            a_body_mm: pieces[a.0].body_length(a.1),
+            b_body_mm: pieces[b.0].body_length(b.1),
+            a_flat_mm: pieces[a.0].flat_length(a.1),
+            b_flat_mm: pieces[b.0].flat_length(b.1),
+            mismatch_mm: pieces[a.0].flat_length(a.1) - pieces[b.0].flat_length(b.1),
+        };
+        if r.mismatch_mm.abs() > opts.seam_tolerance {
+            let (long, short) = if r.mismatch_mm > 0.0 {
+                (a.0, b.0)
+            } else {
+                (b.0, a.0)
+            };
+            // Why: the sides already differ at body size, or the reduction
+            // shortens them differently (different eases, or edges running
+            // at different angles to the body).
+            let why = if (r.a_body_mm - r.b_body_mm).abs() > opts.seam_tolerance {
+                format!(
+                    "they already differ by {:.1} mm at body size",
+                    (r.a_body_mm - r.b_body_mm).abs()
+                )
+            } else if (eases[a.0] - eases[b.0]).abs() > 1e-9 {
+                format!(
+                    "they match at body size, but {} and {} have different eases",
+                    design.pieces[a.0].name, design.pieces[b.0].name
+                )
+            } else {
+                "they match at body size, but run at different angles to the body, so the \
+                 lengthwise reduction shortens them differently (check each piece's arrow points \
+                 up the body)"
+                    .to_string()
+            };
             warnings.push(format!(
-                "seam '{name}' between panels {l} and {r}: sides differ by {:.2} mm \
-                 (tolerance {} mm); the longer side will need easing in",
-                sr.lengths.mismatch().abs(),
+                "seam '{}': the side on {} is {:.1} mm longer than the side on {} (tolerance {} mm): \
+                 {why}; reshape one side, or ease the longer side in",
+                r.seam,
+                design.pieces[long].name,
+                r.mismatch_mm.abs(),
+                design.pieces[short].name,
                 opts.seam_tolerance
             ));
         }
-        report.seams.push(SeamPairReport {
-            seam: name,
-            left_panel: l,
-            right_panel: r,
-            edges: sr.pair.left.edges.len(),
-            body_length_mm: sr.lengths.body,
-            left_length_mm: sr.lengths.left,
-            right_length_mm: sr.lengths.right,
-            mismatch_mm: sr.lengths.mismatch(),
-            mismatch_before_matching_mm: sr.unmatched.mismatch(),
+        seams.push(r);
+    }
+
+    // Pieces.
+    let roles = crate::pattern::edge_roles(design);
+    let mut reports = Vec::new();
+    let mut piece_svgs = Vec::new();
+    let mut titles = Vec::new();
+    for (i, p) in pieces.iter().enumerate() {
+        let mut names: Vec<String> = Vec::new();
+        for role in &roles[i] {
+            if let crate::pattern::EdgeRole::Seam { seam, .. } = role {
+                let n = &seams[*seam].seam;
+                if !names.contains(n) {
+                    names.push(n.clone());
+                }
+            }
+        }
+        let sheet = piece_sheet[i].map(|s| opts.materials[s].name.clone());
+        let mut notes = vec![p.cut_text()];
+        notes.push(format!(
+            "ease {:.2} around, {:.2} along the body (arrow){}",
+            p.reduction.around,
+            p.reduction.along,
+            sheet
+                .as_ref()
+                .map(|s| format!("; sheet: {s}"))
+                .unwrap_or_default()
+        ));
+        piece_svgs.push(piece_svg(p, &p.name, &notes));
+        titles.push(format!("{}: {}", p.name, p.cut_text()));
+        if !p.cut_outline_simple {
+            warnings.push(format!(
+                "piece '{}': the allowance makes the cut line cross itself (an edge curves inwards \
+                 more tightly than the allowance); check the pattern",
+                p.name
+            ));
+        }
+        let (lo, hi) = bounds(&p.seam_line);
+        let (clo, chi) = bounds(&p.cut_outline);
+        let body_area = p.area() / (p.reduction.around * p.reduction.along);
+        let mut notches: Vec<u32> = p.notches.iter().map(|n| n.number).collect();
+        notches.sort_unstable();
+        notches.dedup();
+        reports.push(PieceReport {
+            index: i,
+            name: p.name.clone(),
+            file: format!("piece_{i:02}.svg"),
+            cut: p.cut_text(),
+            copies: p.copies(),
+            folded: p.folded,
+            sheet,
+            ease: p.reduction.around,
+            ease_along: p.reduction.along,
+            seams: names,
+            notches,
+            body_area_mm2: body_area,
+            flat_area_mm2: p.area(),
+            flat_width_mm: hi.x - lo.x,
+            flat_height_mm: hi.y - lo.y,
+            cut_width_mm: chi.x - clo.x,
+            cut_height_mm: chi.y - clo.y,
         });
     }
 
+    // Every copy of every piece, and the trims, for the layouts.
+    let mut all: Vec<(Vec<DVec2>, String, Option<usize>)> = Vec::new();
+    for (i, p) in pieces.iter().enumerate() {
+        for (o, l) in cut_copies(p) {
+            all.push((o, l, piece_sheet[i]));
+        }
+    }
+    for t in &trims {
+        let sheet = t.pieces.first().and_then(|&p| piece_sheet[p]);
+        all.push((t.outline(), format!("{} trim", t.edge), sheet));
+    }
+
     let mut layout = None;
+    let mut layout_doc = None;
     if let Some(sheet) = &opts.sheet {
-        let outlines: Vec<_> = pieces
-            .iter()
-            .map(|p| p.cut_outline.clone())
-            .chain(trims.iter().map(|t| t.outline()))
-            .collect();
+        let outlines: Vec<Vec<DVec2>> = all.iter().map(|x| x.0.clone()).collect();
+        let labels: Vec<String> = all.iter().map(|x| x.1.clone()).collect();
         let l = nest(&outlines, sheet)?;
-        let labels: Vec<String> = (0..pieces.len())
-            .map(|i| format!("panel {i}"))
-            .chain(trims.iter().map(|t| format!("{} trim", t.edge)))
-            .collect();
-        layout = Some(layout_svg(&outlines, &labels, &l));
-        report.layout = Some(LayoutReport {
+        layout_doc = Some(layout_svg(&outlines, &labels, &l));
+        layout = Some(LayoutReport {
             file: "layout.svg".into(),
             sheet_width_mm: sheet.sheet_width,
             length_mm: l.length,
@@ -576,93 +421,90 @@ pub fn run(mesh: &Mesh, seams: &SeamSet, opts: &JobOptions) -> Result<JobOutput>
         });
     }
 
-    // One layout per sheet of the material plan, on its roll width.
+    // One layout per latex sheet, on its roll width.
+    let mut materials = Vec::new();
     let mut material_layouts = Vec::new();
-    if let Some(plan) = &opts.materials {
-        let (gap, allow_rotation) = opts
-            .sheet
-            .map_or((5.0, true), |s| (s.gap, s.allow_rotation));
-        for (si, sheet) in plan.sheets.iter().enumerate() {
-            let ids: Vec<usize> = (0..pieces.len())
-                .filter(|&i| plan.panel_sheet[i] == si)
-                .collect();
-            let trim_ids: Vec<usize> = (0..trims.len())
-                .filter(|&t| {
-                    trims[t]
-                        .panels
-                        .first()
-                        .is_some_and(|&p| plan.panel_sheet[p] == si)
-                })
-                .collect();
-            if ids.is_empty() && trim_ids.is_empty() {
-                continue;
-            }
-            let outlines: Vec<_> = ids
-                .iter()
-                .map(|&i| pieces[i].cut_outline.clone())
-                .chain(trim_ids.iter().map(|&t| trims[t].outline()))
-                .collect();
-            let nest_opts = NestOptions {
-                sheet_width: sheet.roll_width_mm,
-                gap,
-                allow_rotation,
-            };
-            let names: Vec<String> = ids
-                .iter()
-                .map(|i| format!("panel {i}"))
-                .chain(trim_ids.iter().map(|&t| format!("{} trim", trims[t].edge)))
-                .collect();
-            let l = nest(&outlines, &nest_opts).map_err(|e| match e {
-                Error::PieceTooWide {
-                    piece,
-                    width,
-                    height,
-                    ..
-                } => Error::Material(format!(
-                    "{} ({width:.0} × {height:.0} mm) does not fit sheet '{}' ({:.0} mm wide); \
-                     use a wider roll, allow rotation, or add a seam to split it",
-                    names[piece], sheet.name, sheet.roll_width_mm
-                )),
-                other => other,
-            })?;
-            let labels = names;
-            let area: f64 = outlines.iter().map(|o| polygon_area(o).abs()).sum::<f64>() / 1e6;
-            let file = format!("layout_{}.svg", file_stem(&sheet.name));
-            report.materials.push(MaterialUse {
-                sheet: sheet.name.clone(),
-                color: sheet.color.clone(),
-                thickness_mm: sheet.thickness_mm,
-                roll_width_mm: sheet.roll_width_mm,
-                pieces: ids,
-                length_mm: l.length,
-                pieces_area_m2: area,
-                utilisation: l.utilisation,
-                cost: sheet.price_per_m.map(|p| p * l.length / 1000.0),
-                file,
-            });
-            material_layouts.push(layout_svg(&outlines, &labels, &l));
+    let (gap, allow_rotation) = opts
+        .sheet
+        .map_or((5.0, true), |s| (s.gap, s.allow_rotation));
+    for (si, sheet) in opts.materials.iter().enumerate() {
+        let mine: Vec<&(Vec<DVec2>, String, Option<usize>)> =
+            all.iter().filter(|x| x.2 == Some(si)).collect();
+        if mine.is_empty() {
+            continue;
         }
+        let outlines: Vec<Vec<DVec2>> = mine.iter().map(|x| x.0.clone()).collect();
+        let labels: Vec<String> = mine.iter().map(|x| x.1.clone()).collect();
+        let nest_opts = NestOptions {
+            sheet_width: sheet.roll_width_mm,
+            gap,
+            allow_rotation,
+        };
+        let l = nest(&outlines, &nest_opts).map_err(|e| match e {
+            Error::PieceTooWide {
+                piece,
+                width,
+                height,
+                ..
+            } => Error::Material(format!(
+                "{} ({width:.0} × {height:.0} mm) does not fit sheet '{}' ({:.0} mm wide); \
+                 use a wider roll, allow rotation, or add a seam to split it",
+                labels[piece], sheet.name, sheet.roll_width_mm
+            )),
+            other => other,
+        })?;
+        let area: f64 = outlines.iter().map(|o| polygon_area(o).abs()).sum::<f64>() / 1e6;
+        materials.push(MaterialUse {
+            sheet: sheet.name.clone(),
+            color: sheet.color.clone(),
+            thickness_mm: sheet.thickness_mm,
+            roll_width_mm: sheet.roll_width_mm,
+            pieces: (0..pieces.len())
+                .filter(|&i| piece_sheet[i] == Some(si))
+                .collect(),
+            length_mm: l.length,
+            pieces_area_m2: area,
+            utilisation: l.utilisation,
+            cost: sheet.price_per_m.map(|p| p * l.length / 1000.0),
+            file: format!("layout_{}.svg", file_stem(&sheet.name)),
+        });
+        material_layouts.push(layout_svg(&outlines, &labels, &l));
     }
+
+    let report = Report {
+        calibration,
+        pieces: reports,
+        seams,
+        layout,
+        materials,
+        trims: trims.clone(),
+        assembly,
+    };
 
     let pdf = opts.print.map(|print| {
         let mut info = vec![
             "Print at 100 % (actual size, no scaling), then check the 50 mm square.".to_string(),
-            "Trim each page on its corner marks where it overlaps the next one, line the \
-             pieces up and tape them together. Solid lines are cut lines; dashed lines show \
-             where the overlap of a seam or hem starts; numbered ticks are notches."
+            "Trim each page on its corner marks where it overlaps the next one, line the pieces up \
+             and tape them together. Solid lines are cut lines; dashed lines show where the overlap \
+             of a seam or hem starts; numbered ticks are notches; the arrow points up the body."
                 .to_string(),
         ];
+        info.push("Pieces:".into());
+        for r in &report.pieces {
+            info.push(format!("{}: {}", r.name, r.cut));
+        }
         if !report.materials.is_empty() {
             info.push("Materials:".into());
             for u in &report.materials {
                 let cost = u.cost.map(|c| format!(", cost {c:.2}")).unwrap_or_default();
+                let names: Vec<&str> = u.pieces.iter().map(|&i| pieces[i].name.as_str()).collect();
                 info.push(format!(
-                    "{} ({:.2} mm): {:.2} m of {:.0} mm roll for pieces {:?}{cost}",
+                    "{} ({:.2} mm): {:.2} m of {:.0} mm roll for {}{cost}",
                     u.sheet,
                     u.thickness_mm,
                     u.length_mm / 1000.0,
                     u.roll_width_mm,
-                    u.pieces
+                    names.join(", ")
                 ));
             }
         }
@@ -674,31 +516,23 @@ pub fn run(mesh: &Mesh, seams: &SeamSet, opts: &JobOptions) -> Result<JobOutput>
                 .enumerate()
                 .map(|(k, step)| format!("{}. {step}", k + 1)),
         );
-        let drawings: Vec<_> = garment
-            .panels
+        let drawings: Vec<_> = pieces
             .iter()
-            .zip(&pieces)
             .zip(&titles)
-            .map(|((fp, piece), t)| piece_drawing(t, fp, piece))
-            .chain(
-                trims
-                    .iter()
-                    .map(|t| trim_drawing(&format!("{} trim", t.edge), t)),
-            )
+            .map(|(p, t)| piece_drawing(t, p))
+            .chain(trims.iter().map(|t| trim_drawing(&format!("{} trim", t.edge), t)))
             .collect();
         pattern_pdf("Latex pattern", &info, &drawings, &print)
     });
 
     Ok(JobOutput {
         report,
-        panel_svgs,
-        layout_svg: layout,
+        piece_svgs,
+        layout_svg: layout_doc,
         material_layouts,
         trim_svgs: trims.iter().map(trim_svg).collect(),
         pdf,
         warnings,
-        fit,
-        posed_fit: posed.map(|(_, f)| f),
     })
 }
 
@@ -717,195 +551,146 @@ fn file_stem(name: &str) -> String {
     s.trim_matches('_').to_string()
 }
 
-fn seam_name(seams: &SeamSet, id: u32) -> String {
-    seams.seams[id as usize]
-        .name
-        .clone()
-        .unwrap_or_else(|| format!("seam {id}"))
-}
-
-/// Labels for panel `panel`'s seam edges: "name ↔ panel N".
-fn edge_labels(panel: usize, pairs: &[SeamReport], seams: &SeamSet) -> Vec<EdgeLabel> {
-    let mut out = Vec::new();
-    for sr in pairs {
-        let name = seam_name(seams, sr.pair.seam);
-        let (l, r) = (&sr.pair.left, &sr.pair.right);
-        for (side, other) in [(l, r.panel), (r, l.panel)] {
-            if side.panel == panel {
-                let text = if other == panel {
-                    format!("{name} (joins itself)")
-                } else {
-                    format!("{name} ↔ panel {other}")
-                };
-                out.push(EdgeLabel {
-                    edges: side.edges.clone(),
-                    text,
-                });
-            }
-        }
-    }
-    out
-}
-
-/// Names of the seams on a panel's boundary, in loop order, deduplicated.
-fn seam_names(fp: &FlatPanel, seams: &SeamSet) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    for e in &fp.panel.boundary {
-        if let Some(id) = e.seam {
-            let name = seam_name(seams, id);
-            if !out.contains(&name) {
-                out.push(name);
-            }
-        }
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::body::{torso, BodyMeasurements, BodyOptions, Level, SeamStyle};
+    use crate::blocks::{template, TEMPLATES};
+    use crate::body::BodySpec;
 
-    #[test]
-    fn job_on_generated_torso() {
-        let l = |name: &str, h: f64, c: f64| Level {
+    fn sheet(name: &str, color: &str, t: f64, ease: Option<f64>, price: Option<f64>) -> Sheet {
+        Sheet {
             name: name.into(),
-            height_mm: h,
-            circumference_mm: c,
-            ..Default::default()
-        };
-        let m = BodyMeasurements {
-            levels: vec![
-                l("hip", 0.0, 960.0),
-                l("waist", 220.0, 720.0),
-                l("bust", 420.0, 900.0),
-            ],
-        };
-        let b = torso(
-            &m,
-            &BodyOptions {
-                around: 32,
-                ring_spacing_mm: 25.0,
-                style: SeamStyle::Princess,
-            },
-        )
-        .unwrap();
-        let opts = JobOptions {
-            heatmap: Some(HeatmapMetric::MaxStretch),
-            sheet: Some(NestOptions {
-                sheet_width: 600.0,
-                gap: 5.0,
-                allow_rotation: true,
-            }),
-            ..Default::default()
-        };
-        let out = run(&b.mesh, &b.seams, &opts).unwrap();
-        assert_eq!(out.panel_svgs.len(), 6);
-        assert_eq!(out.report.panels.len(), 6);
-        assert_eq!(out.report.seams.len(), 6);
-        assert!(out.layout_svg.is_some());
-        assert!(out.warnings.is_empty(), "{:?}", out.warnings);
+            color: color.into(),
+            thickness_mm: t,
+            roll_width_mm: 1000.0,
+            ease,
+            shear_modulus_mpa: None,
+            price_per_m: price,
+        }
     }
 
     #[test]
-    fn material_plan_sets_ease_and_lays_out_each_sheet() {
-        use crate::materials::{MaterialPlan, Sheet};
-        let l = |name: &str, h: f64, c: f64| Level {
-            name: name.into(),
-            height_mm: h,
-            circumference_mm: c,
-            ..Default::default()
-        };
-        let m = BodyMeasurements {
-            levels: vec![
-                l("hip", 0.0, 960.0),
-                l("waist", 220.0, 720.0),
-                l("bust", 420.0, 900.0),
-            ],
-        };
-        let b = torso(
-            &m,
-            &BodyOptions {
-                around: 32,
-                ring_spacing_mm: 25.0,
-                style: SeamStyle::Princess,
-            },
-        )
-        .unwrap();
-        let sheet =
-            |name: &str, color: &str, t: f64, ease: Option<f64>, price: Option<f64>| Sheet {
-                name: name.into(),
-                color: color.into(),
-                thickness_mm: t,
-                roll_width_mm: 1000.0,
-                ease,
-                shear_modulus_mpa: None,
-                price_per_m: price,
+    fn every_template_makes_a_pattern_without_warnings() {
+        for t in TEMPLATES {
+            let d = template(t.id, &BodySpec::default()).unwrap();
+            let opts = JobOptions {
+                print: Some(PrintOptions::default()),
+                sheet: Some(NestOptions {
+                    sheet_width: 1000.0,
+                    gap: 5.0,
+                    allow_rotation: true,
+                }),
+                materials: vec![sheet("black", "#111111", 0.4, None, None)],
+                ..Default::default()
             };
-        let plan = MaterialPlan {
-            sheets: vec![
+            let out = run(&d, &opts).unwrap();
+            assert!(out.warnings.is_empty(), "{}: {:?}", t.id, out.warnings);
+            assert_eq!(out.piece_svgs.len(), d.pieces.len());
+            assert!(out.pdf.as_ref().unwrap().starts_with("%PDF"));
+            assert!(out.layout_svg.is_some());
+            assert_eq!(out.material_layouts.len(), 1);
+            assert!(out.report.assembly.len() >= 3, "{:?}", out.report.assembly);
+            // Every copy of every piece is laid out.
+            let copies: usize = out.report.pieces.iter().map(|p| p.copies).sum();
+            let placed = out.report.layout.as_ref().unwrap().placements.len();
+            assert_eq!(placed, copies + out.report.trims.len(), "{}", t.id);
+        }
+    }
+
+    #[test]
+    fn sheets_set_the_ease_and_have_their_own_layouts() {
+        let mut d = template("top-sleeves", &BodySpec::default()).unwrap();
+        d.pieces[2].sheet = Some("red 0.60".into());
+        let opts = JobOptions {
+            materials: vec![
                 sheet("black 0.40", "#111111", 0.4, None, Some(20.0)),
                 sheet("red 0.60", "#b01020", 0.6, Some(0.9), None),
             ],
-            panel_sheet: vec![0, 0, 0, 1, 1, 0],
-        };
-        let opts = JobOptions {
-            materials: Some(plan.clone()),
             ..Default::default()
         };
-        let out = run(&b.mesh, &b.seams, &opts).unwrap();
+        let out = run(&d, &opts).unwrap();
         let r = &out.report;
-        for (i, p) in r.panels.iter().enumerate() {
-            let (name, ease) = if plan.panel_sheet[i] == 0 {
-                ("black 0.40", 0.85)
-            } else {
-                ("red 0.60", 0.9)
-            };
-            assert_eq!(p.sheet.as_deref(), Some(name));
-            assert!((p.ease - ease).abs() < 1e-12);
-        }
+        assert_eq!(r.pieces[0].ease, 0.85);
+        assert_eq!(r.pieces[2].ease, 0.9);
+        assert_eq!(r.pieces[2].sheet.as_deref(), Some("red 0.60"));
         assert_eq!(r.materials.len(), 2);
-        assert_eq!(out.material_layouts.len(), 2);
-        assert_eq!(r.materials[0].pieces, vec![0, 1, 2, 5]);
-        assert_eq!(r.materials[1].pieces, vec![3, 4]);
-        for u in &r.materials {
-            assert!(
-                u.length_mm > 100.0 && u.pieces_area_m2 > 0.01 && u.utilisation <= 1.0,
-                "{u:?}"
-            );
-        }
+        assert_eq!(r.materials[0].pieces, vec![0, 1]);
+        assert_eq!(r.materials[1].pieces, vec![2]);
+        assert_eq!(r.materials[0].file, "layout_black_0.40.svg");
         let cost = r.materials[0].cost.unwrap();
         assert!((cost - 20.0 * r.materials[0].length_mm / 1000.0).abs() < 1e-9);
-        assert!(r.materials[1].cost.is_none());
-        assert_eq!(r.materials[0].file, "layout_black_0.40.svg");
+        // The sleeve is reduced less than the armholes it is sewn to.
+        assert!(
+            out.warnings
+                .iter()
+                .any(|w| w.contains("armhole") && w.contains("different eases")),
+            "{:?}",
+            out.warnings
+        );
 
-        // A roll narrower than a piece is reported by sheet and panel.
-        let mut narrow = plan.clone();
-        narrow.sheets[1].roll_width_mm = 50.0;
-        let err = run(
-            &b.mesh,
-            &b.seams,
-            &JobOptions {
-                materials: Some(narrow),
-                ..Default::default()
-            },
-        )
-        .unwrap_err();
+        // A roll narrower than a piece is reported by sheet and piece.
+        let mut narrow = opts.clone();
+        narrow.materials[1].roll_width_mm = 50.0;
+        let err = run(&d, &narrow).unwrap_err();
         assert!(
             err.to_string().contains("does not fit sheet 'red 0.60'"),
             "{err}"
         );
-        // One assignment per panel is required.
-        let mut short = plan;
-        short.panel_sheet.pop();
+    }
+
+    #[test]
+    fn lengthwise_relief_and_bad_options() {
+        let d = template("leggings", &BodySpec::default()).unwrap();
+        let opts = JobOptions {
+            length_relief: 0.4,
+            ..Default::default()
+        };
+        let out = run(&d, &opts).unwrap();
+        let p = &out.report.pieces[0];
+        assert!((p.ease_along - 0.94).abs() < 1e-12);
+        assert!(p.cut.contains("pair"));
+
+        // A sleeve cap and its armhole run at different angles: with less
+        // reduction along the body they come out different lengths, and
+        // the warning says why.
+        let d = template("top-sleeves", &BodySpec::default()).unwrap();
+        let out = run(&d, &opts).unwrap();
+        assert!(
+            out.warnings
+                .iter()
+                .any(|w| w.contains("armhole") && w.contains("different angles")),
+            "{:?}",
+            out.warnings
+        );
+        // A piece drawn on its side, with its arrow turned to match, comes
+        // out the same as drawn upright.
+        let mut turned = template("skirt", &BodySpec::default()).unwrap();
+        for n in &mut turned.pieces[0].nodes {
+            (n.x, n.y) = (-n.y, n.x);
+        }
+        turned.pieces[0].up_deg = 90.0;
+        let upright = run(&template("skirt", &BodySpec::default()).unwrap(), &opts).unwrap();
+        let turned = run(&turned, &opts).unwrap();
+        let (a, b) = (&upright.report.pieces[0], &turned.report.pieces[0]);
+        assert!((a.flat_area_mm2 - b.flat_area_mm2).abs() < 1e-3);
+        assert!((a.flat_width_mm - b.flat_height_mm).abs() < 1e-6);
+        assert!(turned.warnings.is_empty(), "{:?}", turned.warnings);
         assert!(run(
-            &b.mesh,
-            &b.seams,
+            &d,
             &JobOptions {
-                materials: Some(short),
+                length_relief: 2.0,
                 ..Default::default()
             }
         )
         .is_err());
+        assert!(run(
+            &d,
+            &JobOptions {
+                ease: EaseSpec::Uniform(0.1),
+                ..Default::default()
+            }
+        )
+        .is_err());
+        assert!(run(&Design::default(), &JobOptions::default()).is_err());
     }
 }

@@ -5,7 +5,6 @@
 (() => {
   const $id = (id) => document.getElementById(id);
   const narrow = matchMedia('(max-width: 900px)');
-  const view3d = () => (typeof viewer !== 'undefined' ? viewer : null);
   const panes = (side) => [...document.querySelectorAll(`.sidebar.${side} .pane`)];
 
   // ---- side panels --------------------------------------------------------
@@ -23,8 +22,7 @@
   }
 
   // ---- phones: one screen at a time ----------------------------------------
-  // Each screen is a pane of a side panel or one of the two views. On a
-  // phone the inspector sits at the top of the Garment screen and the
+  // On a phone the inspector sits at the top of the Garment screen and the
   // sheets at the end of the Settings screen.
   const sideOf = (name) => (document.querySelector(`.sidebar.left .pane[data-pane="${name}"]`) ? 'left'
     : document.querySelector(`.sidebar.right .pane[data-pane="${name}"]`) ? 'right' : null);
@@ -35,58 +33,48 @@
     }
     const side = sideOf(name);
     if (side) showTab(side, name);
-    // The 3D canvas may have been hidden: let it size itself again.
-    if (name === '3d' && view3d()) requestAnimationFrame(() => view3d().draw());
+    if (name === 'design') requestAnimationFrame(() => editor.render());
   }
   for (const b of document.querySelectorAll('.mobilebar button')) b.onclick = () => showScreen(b.dataset.pane);
 
   const inspector = document.querySelector('.pane[data-pane="inspector"]');
-  const inspectorBits = [$id('inspector-empty'), $id('g-active')];
+  const inspectorBits = [$id('inspector-empty'), $id('inspector')];
   const sheetsPane = document.querySelector('.pane[data-pane="sheets"]');
   const sheetsBits = [...sheetsPane.children];
   function arrange() {
     if (narrow.matches) {
-      const garment = document.querySelector('.pane[data-pane="garment"]');
-      garment.prepend(...inspectorBits);
+      document.querySelector('.pane[data-pane="garment"]').prepend(...inspectorBits);
       document.querySelector('.pane[data-pane="settings"]').append(...sheetsBits);
-      showScreen(document.body.dataset.screen || '3d');
+      showScreen(document.body.dataset.screen || 'design');
     } else {
       inspector.append(...inspectorBits);
       sheetsPane.append(...sheetsBits);
-      showTab('left', localStorage.getItem('latexpat.tab.left') || 'body');
-      showTab('right', localStorage.getItem('latexpat.tab.right') || 'settings');
+      showTab('left', localStorage.getItem('latexpat.tab.left') || 'garment');
+      showTab('right', localStorage.getItem('latexpat.tab.right') || 'inspector');
     }
-    if (view3d()) requestAnimationFrame(() => view3d().draw());
+    requestAnimationFrame(() => editor.render());
   }
   narrow.addEventListener('change', arrange);
-  // The 3D background follows the light / dark theme.
-  matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => view3d() && view3d().draw());
   arrange();
 
   // ---- follow what app.js shows ---------------------------------------------
   const watch = (el, fn, opts) => new MutationObserver(fn).observe(el, opts);
-  // Selecting or drawing a curve opens the inspector.
-  watch($id('g-active'), () => {
-    const shown = !$id('g-active').hidden;
-    $id('inspector-empty').hidden = shown;
-    if (shown && !narrow.matches) showTab('right', 'inspector');
-  }, { attributes: true, attributeFilter: ['hidden'] });
-  // A new pattern: show the pieces and the report.
+  // Selecting something opens the inspector.
+  watch($id('inspector'), () => {
+    if ($id('inspector').children.length && !narrow.matches) showTab('right', 'inspector');
+  }, { childList: true });
   watch($id('pieces'), () => {
-    const has = $id('pieces').children.length > 0;
-    $id('pattern-empty').hidden = has;
+    $id('pattern-empty').hidden = $id('pieces').children.length > 0;
   }, { childList: true });
   watch($id('results'), () => {
-    const shown = !$id('results').hidden;
-    $id('report-empty').hidden = shown;
+    $id('report-empty').hidden = !$id('results').hidden;
   }, { attributes: true, attributeFilter: ['hidden'] });
   let runs = 0;
   watch($id('status'), () => {
-    const t = $id('status').textContent;
-    if (/^Done/.test(t)) {
+    if (/^Done/.test($id('status').textContent)) {
       runs += 1;
       if (narrow.matches) {
-        if (document.body.dataset.screen !== '3d' || runs === 1) showScreen('pattern');
+        if (document.body.dataset.screen !== 'design' || runs === 1) showScreen('pattern');
       } else if (!$id('live').checked) {
         showTab('right', 'report');
       }
@@ -96,14 +84,13 @@
   // Warnings, counted in the status bar.
   const warnButton = $id('status-warnings');
   function countWarnings() {
-    const n = document.querySelectorAll('#warnings li, #g-warnings li, #fit-warnings li').length;
+    const n = document.querySelectorAll('#warnings li, #g-warnings li').length;
     warnButton.hidden = n === 0;
     warnButton.textContent = `${n} warning${n === 1 ? '' : 's'}`;
   }
-  for (const id of ['warnings', 'g-warnings', 'fit-warnings']) watch($id(id), countWarnings, { childList: true });
+  for (const id of ['warnings', 'g-warnings']) watch($id(id), countWarnings, { childList: true });
   warnButton.onclick = () => {
-    const where = document.querySelector('#warnings li') ? 'report'
-      : document.querySelector('#g-warnings li') ? 'garment' : 'body';
+    const where = document.querySelector('#warnings li') ? 'report' : 'garment';
     if (narrow.matches) showScreen(where);
     else showTab(sideOf(where), where);
   };
@@ -114,15 +101,5 @@
   const setZoom = () => $id('pieces').style.setProperty('--piece-w', `${zoom.value}px`);
   zoom.oninput = setZoom;
   setZoom();
-
-  // Live: make the pattern again whenever the garment preview is ready.
-  let liveTimer = null;
-  watch($id('g-status'), () => {
-    if (!$id('live').checked || !/^Ready/.test($id('g-status').textContent)) return;
-    clearTimeout(liveTimer);
-    liveTimer = setTimeout(() => { if (!$id('run').disabled) $id('run').click(); }, 300);
-  }, { childList: true, characterData: true, subtree: true });
-  $id('live').onchange = () => {
-    if ($id('live').checked && /^Ready/.test($id('g-status').textContent)) $id('run').click();
-  };
+  $id('live').onchange = () => { if ($id('live').checked) check(); };
 })();

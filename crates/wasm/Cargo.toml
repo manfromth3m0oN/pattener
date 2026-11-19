@@ -11,6 +11,6 @@ publish = false
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-latexpat-core = { workspace = true, features = ["serde", "bundled-body"] }
+latexpat-core = { workspace = true, features = ["serde"] }
 serde.workspace = true
 serde_json.workspace = true

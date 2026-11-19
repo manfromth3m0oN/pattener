@@ -23,9 +23,9 @@
 //! `μ = Σ xᵢ Fᵢ / Σ xᵢ²` with `xᵢ = wᵢ t (λᵢ − λᵢ⁻²)`.
 //!
 //! ## Wearing tension
-//! A panel flattened at ease `s` is stretched by about `λ = 1/s` in every
-//! direction when worn (that is what the uniform reference scaling in ARAP
-//! does). For an equi-biaxially stretched neo-Hookean membrane of thickness
+//! A piece cut at ease `s` is stretched by about `λ = 1/s` in every
+//! direction when worn (with the same reduction around and along the
+//! body). For an equi-biaxially stretched neo-Hookean membrane of thickness
 //! `t`, the tension per unit of original width is
 //! ```text
 //! T = μ t (λ − λ⁻⁵).

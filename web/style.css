@@ -151,9 +151,7 @@ img { max-width: 100%; height: auto; }
 .measure-grid label span { border-bottom: 1px dotted var(--muted); cursor: help; align-self: flex-start; }
 .shape-grid { display: grid; grid-template-columns: 1fr; gap: 0; }
 .shape-grid label { margin-bottom: 0.4rem; }
-#fit-status { color: var(--muted); font-size: 0.85rem; }
-#fit-table td.off { color: var(--warn); font-weight: 600; }
-#body-downloads, #downloads { display: flex; flex-wrap: wrap; gap: 0.3rem 0.8rem; align-items: baseline; font-size: 0.85rem; }
+#downloads { display: flex; flex-wrap: wrap; gap: 0.3rem 0.8rem; align-items: baseline; font-size: 0.85rem; }
 #downloads a { overflow-wrap: anywhere; }
 #measure-hint { margin: 0.2rem 0 0.4rem; }
 
@@ -163,7 +161,6 @@ img { max-width: 100%; height: auto; }
 .curve-list li.selected { background: var(--select-soft); border-color: var(--select); }
 .curve-list .kind { display: inline-block; width: 0.7rem; height: 0.7rem; border-radius: 2px; margin-right: 0.45rem; vertical-align: middle; }
 #g-status { font-size: 0.85rem; }
-#g-zones input[type=number] { width: 4.5rem; }
 #sheets input[type=number] { width: 4.8rem; }
 #sheets input[type=text] { width: 7.5rem; }
 .swatch { display: inline-block; width: 0.9rem; height: 0.9rem; border-radius: 3px; vertical-align: middle; margin-right: 0.35rem; border: 1px solid #0004; }
@@ -174,18 +171,17 @@ h4 { margin: 0.8rem 0 0.3rem; font-size: 0.85rem; font-weight: 600; }
 #materials-out img, #layout img, #trims-out img { background: #fff; border-radius: 4px; max-height: 50vh; object-fit: contain; width: 100%; }
 
 /* ---- views ------------------------------------------------------------- */
-.views { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); gap: 1px; background: var(--line); min-height: 0; }
+.views { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr); gap: 1px; background: var(--line); min-height: 0; }
 .view { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--view-bg); container-type: inline-size; }
 /* Tool labels give way to icons (with tooltips) when the view is narrow. */
-@container (max-width: 680px) { .tools button span { display: none; } }
+@container (max-width: 760px) { .tools button span { display: none; } }
+.view-head label.check { flex: none; margin: 0; white-space: nowrap; }
 .view-head {
   display: flex; align-items: center; gap: 0.5rem; padding: 0.35rem 0.5rem; flex: none;
   background: var(--panel); border-bottom: 1px solid var(--line); min-height: 2.6rem; overflow-x: auto;
 }
 .view-title { display: flex; align-items: center; gap: 0.4rem; font-weight: 600; }
 .view-body { position: relative; flex: 1; min-height: 0; }
-#viewer { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
-#viewer.picking { cursor: crosshair; }
 .view-hint { position: absolute; left: 0.6rem; bottom: 0.5rem; color: var(--muted); font-size: 0.75rem; pointer-events: none; }
 .overlay {
   position: absolute; top: 0.6rem; left: 0.6rem; max-width: 260px; padding: 0.55rem 0.65rem;
@@ -194,11 +190,8 @@ h4 { margin: 0.8rem 0 0.3rem; font-size: 0.85rem; font-weight: 600; }
 }
 .overlay label { margin: 0 0 0.3rem; }
 .overlay .hint { font-size: 0.75rem; margin: 0.3rem 0 0; }
-.legend { display: flex; align-items: center; gap: 0.4rem; font-size: 0.72rem; color: var(--muted); }
-.legend .bar { flex: 1; height: 8px; border-radius: 3px;
-  background: linear-gradient(to right, rgb(40,90,200) 0%, rgb(242,242,242) 20%, rgb(242,140,26) 60%, rgb(178,0,0) 100%); }
 
-/* Tool palette above the 3D view. */
+/* Tool palette above the design. */
 .tools { display: flex; align-items: center; gap: 0.2rem; }
 .tools button { background: transparent; border-color: transparent; color: var(--muted); padding: 0.3rem 0.5rem; }
 .tools button:hover { color: var(--text); background: var(--panel-2); }
@@ -206,6 +199,34 @@ h4 { margin: 0.8rem 0 0.3rem; font-size: 0.85rem; font-weight: 600; }
 .tools select { max-width: 7.5rem; padding: 0.2rem 0.3rem; }
 .tool-group { display: inline-flex; align-items: center; gap: 0.2rem; }
 .tools .sep { width: 1px; align-self: stretch; background: var(--line); margin: 0 0.3rem; }
+
+/* The design editor: pieces at body size over a millimetre grid. */
+#editor { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; user-select: none; outline: none; }
+#editor[data-tool="add"], #editor[data-tool="draw"], #editor[data-tool="split"], #editor[data-tool="seam"] { cursor: crosshair; }
+#editor .grid-minor { stroke: var(--mat-line); stroke-width: 1; }
+#editor .grid-major { stroke: var(--line-2); stroke-width: 1; opacity: 0.55; }
+#editor .guide { stroke: var(--warn); stroke-width: 1; stroke-dasharray: 6 5; opacity: 0.45; }
+#editor .guide-label { fill: var(--warn); font-size: 11px; opacity: 0.8; }
+#editor .piece { fill: color-mix(in srgb, var(--fill) 30%, transparent); stroke: var(--text); stroke-width: 1.4; }
+#editor .piece.active { stroke: var(--select); stroke-width: 2; }
+#editor .fold { stroke: var(--muted); stroke-width: 2.5; stroke-dasharray: 10 3 2 3; fill: none; }
+#editor .seam-edge { stroke: var(--c); stroke-width: 3.5; fill: none; opacity: 0.85; }
+#editor .seam-edge.hl { stroke-width: 6; opacity: 1; }
+#editor .seam-dot { fill: var(--c); stroke: var(--view-bg); stroke-width: 1.5; }
+#editor .edge-sel { stroke: var(--select); stroke-width: 6; fill: none; opacity: 0.9; }
+#editor .edge-hover { stroke: var(--select); stroke-width: 4; fill: none; opacity: 0.45; }
+#editor .node { fill: var(--panel-2); stroke: var(--select); stroke-width: 1.5; }
+#editor .node.sel { fill: var(--select); }
+#editor .up-arrow { stroke: var(--muted); stroke-width: 1.5; fill: none; }
+#editor .up-handle { fill: var(--panel-2); stroke: var(--accent); stroke-width: 2; cursor: grab; }
+#editor .notch { fill: none; stroke: var(--accent); stroke-width: 1.2; }
+#editor .preview { stroke: var(--accent); stroke-width: 1.5; stroke-dasharray: 5 4; fill: none; }
+#editor text { font-family: inherit; pointer-events: none; }
+#editor .piece-label { fill: var(--text); font-size: 13px; font-weight: 600; text-anchor: middle; dominant-baseline: middle; opacity: 0.85; }
+#editor .edge-label { fill: var(--muted); font-size: 10.5px; text-anchor: middle; dominant-baseline: middle; }
+#editor .scale { stroke: var(--muted); stroke-width: 2; }
+#editor .scale-label { fill: var(--muted); font-size: 11px; text-anchor: middle; }
+#editor-hint { right: 0.6rem; bottom: 1.8rem; }
 
 /* The flat pattern: pieces on paper over a cutting mat. */
 .paper-bg {
@@ -248,8 +269,8 @@ h4 { margin: 0.8rem 0 0.3rem; font-size: 0.85rem; font-weight: 600; }
   .tabbar { display: none; }
   body[data-screen="body"] .sidebar.left, body[data-screen="garment"] .sidebar.left,
   body[data-screen="settings"] .sidebar.right, body[data-screen="report"] .sidebar.right { display: flex; border: 0; }
-  body[data-screen="3d"] .views, body[data-screen="pattern"] .views { display: grid; grid-template-columns: 1fr; }
-  body[data-screen="3d"] .view3d, body[data-screen="pattern"] .view2d { display: flex; }
+  body[data-screen="design"] .views, body[data-screen="pattern"] .views { display: grid; grid-template-columns: 1fr; }
+  body[data-screen="design"] .viewdesign, body[data-screen="pattern"] .view2d { display: flex; }
   .statusbar { min-height: 1.6rem; }
   .mobilebar {
     display: flex; background: var(--panel); border-top: 1px solid var(--line);

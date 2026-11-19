@@ -1,70 +1,42 @@
 //! # latexpat-core
 //!
-//! Pattern generation for latex (natural rubber sheet) garments.
+//! Pattern drafting for latex (natural rubber sheet) garments.
 //!
-//! A garment is a set of panels bounded by seams on a 3D body mesh. Each
-//! panel is flattened to 2D at a target *ease factor* `s` (e.g. 0.85): the
-//! flat piece is `s` times the size of the body, so it stretches by about
-//! `1/s` when pulled on. Latex absorbs curvature by stretching, so we do
-//! not aim for a distortion-free layout; we aim for low, even strain and
-//! report it.
+//! A garment is designed flat, at body size: pieces drawn in 2D (usually
+//! starting from a template drafted from the wearer's measurements) and the
+//! seams that join them. Making the pattern reduces each piece by its
+//! *ease* `s` (e.g. 0.85), so it stretches by about `1/s` when worn, then
+//! adds glue laps and hems, numbered notches, trim strips, sheet layouts,
+//! an assembly guide and a printable PDF.
 //!
 //! Pipeline:
-//! 1. [`obj::parse_obj`] → [`Mesh`]
-//! 2. [`SeamSet::resolve`] + [`cut::cut_panels`] → [`Panel`]s (topological discs)
-//! 3. [`lscm::lscm`] → initial conformal layout
-//! 4. [`arap::arap`] → refinement towards reference triangles scaled by [`Ease`]
-//! 5. [`seam_match`] → pair seam sides, equalise their flat lengths
-//! 6. [`strain::measure`] → principal stretches and flipped triangles
-//! 7. [`svg::panel_svg`] → 1:1 SVG, optionally with a strain heatmap
-//!
-//! [`flatten_garment`] runs steps 2–6.
+//! 1. [`body::Body`]: measurements (missing ones estimated) and the levels
+//!    drafting works from;
+//! 2. [`blocks::template`]: a [`design::Design`] drafted for that body,
+//!    edited by the user; [`blocks::redraft`] moves it to new measurements;
+//! 3. [`pattern::build_pattern`]: unfolded, reduced pieces with allowances
+//!    and notches;
+//! 4. [`job::run`]: SVGs, layouts, the assembly guide, the PDF and a report.
 //!
 //! This crate does no file I/O and spawns no threads, so it can be
 //! compiled to WebAssembly.
 
-// Index loops mirror the formulas; `!(a > b)` deliberately rejects NaN.
-#![allow(clippy::needless_range_loop, clippy::neg_cmp_op_on_partial_ord)]
-
 pub mod allowance;
-pub mod arap;
 pub mod assembly;
+pub mod blocks;
 pub mod body;
 pub mod calibrate;
-pub mod cut;
-pub mod ease;
+pub mod design;
 pub mod error;
-pub mod fitmap;
-pub mod flatten;
-pub mod garment;
-pub mod hints;
-pub mod human;
+pub mod geom;
 pub mod job;
-pub mod linalg;
-pub mod lscm;
 pub mod materials;
-pub mod mesh;
 pub mod nest;
-pub mod obj;
-pub mod outline;
-pub mod panel;
 pub mod pattern;
 pub mod pdf;
 pub mod project;
-pub mod seam_match;
-pub mod seams;
-pub mod smoothing;
-pub mod strain;
 pub mod svg;
-pub mod testmesh;
 
-pub use ease::Ease;
+pub use design::{Design, Piece, Seam};
 pub use error::{Error, Result};
-pub use flatten::{
-    flatten_garment, flatten_panel, FlatPanel, FlattenOptions, Garment, SeamMatching, SeamReport,
-};
 pub use glam;
-pub use mesh::Mesh;
-pub use panel::{BoundaryEdge, Panel};
-pub use seams::{Seam, SeamId, SeamSet};
-pub use strain::{PrincipalStretch, StrainReport};
