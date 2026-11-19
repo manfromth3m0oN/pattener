@@ -67,14 +67,13 @@ jobs:
           sleep 1
           node web/smoke-test.cjs http://localhost:8765/
 
-      # Everything the page loads: scripts, styles, the module and the
-      # example projects (not the build script or the smoke test).
+      # Everything the page loads: scripts, styles and the module
       - name: Collect site
         run: |
           mkdir _site
           cp -r web/. _site/
           rm _site/build.sh _site/smoke-test.cjs
-          test -f _site/viewer.js && test -f _site/examples/top.project.json
+          test -f _site/editor.js && test -f _site/geometry.js && test -f _site/latexpat.wasm
 
       # On pull requests, the built site as a download to try locally.
       - name: Upload preview

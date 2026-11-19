@@ -12,7 +12,6 @@
 //! with `y` up, like the flat pattern; one `cm` operator scales them to
 //! points (72 / 25.4 per mm).
 
-use crate::flatten::FlatPanel;
 use crate::pattern::{PatternPiece, TrimStrip};
 use glam::DVec2;
 use std::fmt::Write;
@@ -100,9 +99,10 @@ impl Drawing {
     }
 }
 
-/// A pattern piece: cut line, glue line where it has an allowance, notches
-/// with their numbers.
-pub fn piece_drawing(title: &str, fp: &FlatPanel, piece: &PatternPiece) -> Drawing {
+/// A pattern piece: cut line, seam line where it has an allowance, the
+/// fold line of an unfolded piece, an arrow up the body, notches with their
+/// numbers, and the piece's name and how to cut it in its middle.
+pub fn piece_drawing(title: &str, piece: &PatternPiece) -> Drawing {
     let mut d = Drawing {
         title: title.to_string(),
         ..Default::default()
@@ -113,18 +113,40 @@ pub fn piece_drawing(title: &str, fp: &FlatPanel, piece: &PatternPiece) -> Drawi
         width_mm: 0.3,
         dashed: false,
     });
-    for (k, e) in fp.panel.boundary.iter().enumerate() {
-        if piece.edge_allowance[k] > 0.0 {
-            d.strokes.push(Stroke {
-                points: vec![fp.uv[e.from as usize], fp.uv[e.to as usize]],
-                closed: false,
-                width_mm: 0.2,
-                dashed: true,
-            });
-        }
+    for run in crate::svg::allowance_runs(piece) {
+        d.strokes.push(Stroke {
+            points: run,
+            closed: false,
+            width_mm: 0.2,
+            dashed: true,
+        });
     }
+    if let Some([a, b]) = piece.fold_line {
+        d.strokes.push(Stroke {
+            points: vec![a, b],
+            closed: false,
+            width_mm: 0.15,
+            dashed: true,
+        });
+    }
+    let (g0, g1) = crate::svg::grain_arrow(piece);
+    d.strokes.push(Stroke {
+        points: vec![g0, g1],
+        closed: false,
+        width_mm: 0.25,
+        dashed: false,
+    });
+    d.strokes.push(Stroke {
+        points: {
+            let [b0, b1] = crate::svg::arrow_barbs(g0, g1);
+            vec![b0, g1, b1]
+        },
+        closed: false,
+        width_mm: 0.25,
+        dashed: false,
+    });
     for n in &piece.notches {
-        let out = piece.edge_allowance[n.boundary_edge].max(2.0);
+        let out = n.allowance.max(2.0);
         d.strokes.push(Stroke {
             points: vec![n.position - 4.0 * n.normal, n.position + out * n.normal],
             closed: false,
@@ -137,14 +159,18 @@ pub fn piece_drawing(title: &str, fp: &FlatPanel, piece: &PatternPiece) -> Drawi
             text: n.number.to_string(),
         });
     }
-    // The piece's name (the title up to any " — ") in its middle, so a
-    // loose page can be told apart.
-    let c = fp.uv.iter().sum::<DVec2>() / fp.uv.len() as f64;
-    let short = title.split(" — ").next().unwrap_or(title);
+    // The piece's name and how to cut it, beside the arrow, so a loose page
+    // can be told apart.
+    let c = 0.5 * (g0 + g1) + DVec2::new(4.0, 0.0);
     d.labels.push(Label {
-        at: c - DVec2::new(1.5 * short.len() as f64, 0.0),
+        at: c,
         size_mm: 6.0,
-        text: short.to_string(),
+        text: piece.name.clone(),
+    });
+    d.labels.push(Label {
+        at: c - DVec2::new(0.0, 6.0),
+        size_mm: 3.5,
+        text: piece.cut_text(),
     });
     d
 }
@@ -473,7 +499,7 @@ mod tests {
             edge_length_mm: len / 0.9,
             length_mm: len,
             width_mm: 12.0,
-            panels: vec![0],
+            pieces: vec![0],
         }
     }
 

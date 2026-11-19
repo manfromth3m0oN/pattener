@@ -1,28 +1,15 @@
-//! `latexpat` command-line interface. All file I/O lives here; the maths is
-//! in `latexpat-core`.
-
-// Index loops mirror the formulas; `!(a > b)` deliberately rejects NaN.
-#![allow(clippy::needless_range_loop, clippy::neg_cmp_op_on_partial_ord)]
+//! `latexpat` command-line interface. All file I/O lives here; the
+//! drafting is in `latexpat-core`.
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
-use latexpat_core::arap::ArapOptions;
-use latexpat_core::body::{torso, BodyMeasurements, BodyOptions, SeamStyle};
-use latexpat_core::calibrate::{calibrate, Calibration, CalibrationResult, SheetFit};
-use latexpat_core::fitmap::Material;
-use latexpat_core::garment::{build, material_plan, zones_on};
-use latexpat_core::glam::DVec3;
-use latexpat_core::human::{along_body, fit, BodyModel, Measurer};
-use latexpat_core::job::{self, EaseSpec, JobOptions, JobOutput, Report};
-use latexpat_core::nest::NestOptions;
-use latexpat_core::obj::{parse_obj, write_obj};
-use latexpat_core::pattern::PatternOptions;
-use latexpat_core::pdf::{Paper, PrintOptions};
+use latexpat_core::blocks::{redraft, template, TEMPLATES};
+use latexpat_core::body::{Body, BodySpec, Figure, Measure, Measurements};
+use latexpat_core::calibrate::{calibrate, Calibration, CalibrationResult};
+use latexpat_core::job::{self, EaseSpec, JobOutput};
+use latexpat_core::materials::Sheet;
+use latexpat_core::pdf::Paper;
 use latexpat_core::project::Project;
-use latexpat_core::seams::AllowanceSide;
-use latexpat_core::svg::HeatmapMetric;
-use latexpat_core::{SeamMatching, SeamSet};
-use serde::Serialize;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -30,7 +17,7 @@ use std::path::{Path, PathBuf};
 #[command(
     name = "latexpat",
     version,
-    about = "Pattern generator for latex (rubber sheet) garments"
+    about = "Flat pattern drafting for latex (rubber sheet) garments"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -38,51 +25,138 @@ struct Cli {
 }
 
 #[derive(Subcommand)]
-#[allow(clippy::large_enum_variant)] // parsed once; boxing buys nothing
 enum Command {
-    /// Cut a body mesh along seams and flatten each panel to an SVG pattern.
-    Flatten(FlattenArgs),
+    /// List the templates.
+    Templates,
+    /// Show the body a set of measurements describes, with estimates for
+    /// the ones not given.
+    Body(BodyArgs),
+    /// Start a project from a template drafted for a body.
+    Template(TemplateArgs),
+    /// Move a project's design to new measurements, keeping its edits.
+    Redraft(RedraftArgs),
+    /// Make the pattern of a project: SVGs, layouts, PDF and a report.
+    Pattern(PatternArgs),
     /// Fit swatch stretch tests and print the ease for each latex sheet.
     Calibrate(CalibrateArgs),
-    /// Generate a torso mesh and seams from body measurements.
-    Body(BodyArgs),
-    /// Fit the full body model to the measurements in a project file.
-    Human(HumanArgs),
 }
 
+#[derive(Clone, Copy, ValueEnum)]
+enum FigureArg {
+    Women,
+    Men,
+}
+
+impl From<FigureArg> for Figure {
+    fn from(f: FigureArg) -> Self {
+        match f {
+            FigureArg::Women => Figure::Women,
+            FigureArg::Men => Figure::Men,
+        }
+    }
+}
+
+/// Where measurements come from.
 #[derive(clap::Args)]
-struct HumanArgs {
-    /// Project file: {"body": {"measurements": {"height": 1680, ...}, "shape": {...}}}.
-    project: PathBuf,
-    /// Output directory (writes body.obj and measurements.json).
-    #[arg(short, long)]
-    output: PathBuf,
+struct BodySource {
+    /// Measurements file: {"height": 1680, "bust": 940, ...} in mm.
+    #[arg(long, conflicts_with = "project")]
+    measurements: Option<PathBuf>,
+    /// Take the body from this project file instead.
+    #[arg(long)]
+    project: Option<PathBuf>,
+    /// Figure the missing measurements are estimated from.
+    #[arg(long, value_enum)]
+    figure: Option<FigureArg>,
+}
+
+impl BodySource {
+    fn load(&self) -> Result<BodySpec> {
+        let mut spec = if let Some(p) = &self.project {
+            // Only the body: a 3D editor project's measurements still count.
+            let p: Project = serde_json::from_str(&read(p)?)
+                .with_context(|| format!("parsing {}", p.display()))?;
+            p.body
+        } else if let Some(m) = &self.measurements {
+            let t = read(m)?;
+            let measurements: Measurements =
+                serde_json::from_str(&t).with_context(|| format!("parsing {}", m.display()))?;
+            BodySpec {
+                measurements,
+                ..Default::default()
+            }
+        } else {
+            BodySpec::default()
+        };
+        if let Some(f) = self.figure {
+            spec.figure = f.into();
+        }
+        Ok(spec)
+    }
 }
 
 #[derive(clap::Args)]
 struct BodyArgs {
-    /// Measurements file: {"levels": [{"name", "height_mm", "circumference_mm"}, ...]}, bottom to top.
-    measurements: PathBuf,
-    /// Output directory (writes body.obj and body.seams.json).
+    #[command(flatten)]
+    body: BodySource,
+}
+
+#[derive(clap::Args)]
+struct TemplateArgs {
+    /// Template id (see `latexpat templates`).
+    id: String,
+    #[command(flatten)]
+    body: BodySource,
+    /// Project file to write.
     #[arg(short, long)]
     output: PathBuf,
-    /// Seam layout.
-    #[arg(long, value_enum, default_value_t = Style::Princess)]
-    style: Style,
-    /// Vertices around each ring (multiple of 4).
-    #[arg(long, default_value_t = 64)]
-    around: u32,
-    /// Maximum distance between rings (mm).
-    #[arg(long, default_value_t = 10.0)]
-    ring_spacing: f64,
+}
+
+#[derive(clap::Args)]
+struct RedraftArgs {
+    /// Project drafted from a template.
+    project: PathBuf,
+    /// New measurements file: {"height": 1680, ...} in mm.
+    #[arg(long)]
+    measurements: PathBuf,
+    /// Project file to write (default: overwrite the input).
+    #[arg(short, long)]
+    output: Option<PathBuf>,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
-enum Style {
-    /// Side seams only: front and back.
-    Tube,
-    /// Side seams and princess lines: six panels.
-    Princess,
+enum PaperArg {
+    A4,
+    Letter,
+    None,
+}
+
+#[derive(clap::Args)]
+struct PatternArgs {
+    /// Project file.
+    project: PathBuf,
+    /// Output directory.
+    #[arg(short, long)]
+    output: PathBuf,
+    /// Ease (flat size / body size around the body); overrides the project.
+    #[arg(long)]
+    ease: Option<f64>,
+    /// Share of the reduction along the body, 0–1; overrides the project.
+    #[arg(long)]
+    length_relief: Option<f64>,
+    /// Paper for the printable PDF; overrides the project.
+    #[arg(long, value_enum)]
+    pdf: Option<PaperArg>,
+    /// Also lay every piece out on one sheet this wide (mm).
+    #[arg(long)]
+    sheet_width: Option<f64>,
+    /// Swatch calibration file; the ease then comes from each piece's sheet.
+    #[arg(long, requires = "sheet")]
+    calibration: Option<PathBuf>,
+    /// Sheet for pieces whose own sheet is not in the calibration: a name
+    /// from the calibration file or a thickness such as 0.5mm.
+    #[arg(long)]
+    sheet: Option<String>,
 }
 
 #[derive(clap::Args)]
@@ -90,283 +164,226 @@ struct CalibrateArgs {
     /// Swatch file: {"sheets": [{"name", "thickness_mm", "samples": [...]}], "target": ...}.
     file: PathBuf,
     /// Also print the ease for these untested thicknesses (mm), from the pooled fit.
-    #[arg(long)]
+    #[arg(long, value_delimiter = ',')]
     thickness: Vec<f64>,
-}
-
-#[derive(clap::Args)]
-struct FlattenArgs {
-    /// Triangle/polygon mesh in OBJ format (millimetres unless --scale is given).
-    #[arg(required_unless_present = "project")]
-    mesh: Option<PathBuf>,
-    /// Seam file: {"seams": [{"name": "...", "vertices": [0-based OBJ vertex indices]}]}.
-    #[arg(long, conflicts_with = "project")]
-    seams: Option<PathBuf>,
-    /// Project file with a body and a garment drawn on it (instead of a mesh).
-    #[arg(long, conflicts_with = "mesh")]
-    project: Option<PathBuf>,
-    /// Ease factor s: flat edge length = s × body edge length (default 0.85).
-    #[arg(long, conflicts_with = "calibration")]
-    ease: Option<f64>,
-    /// Swatch calibration file; the ease then comes from the chosen sheet.
-    #[arg(long, requires = "sheet")]
-    calibration: Option<PathBuf>,
-    /// Sheet for all panels: a sheet name from the calibration file, or a
-    /// thickness such as 0.5mm (uses the pooled fit).
-    #[arg(long, requires = "calibration")]
-    sheet: Option<String>,
-    /// Use a different sheet for one panel, e.g. --panel-sheet 2=0.6mm (repeatable).
-    #[arg(long, value_name = "PANEL=SHEET", requires = "calibration")]
-    panel_sheet: Vec<String>,
-    /// Output directory.
-    #[arg(short, long)]
-    output: PathBuf,
-    /// Multiply mesh coordinates by this to get millimetres (10 for cm, 1000 for m).
-    #[arg(long, default_value_t = 1.0)]
-    scale: f64,
-    /// Body axis that should point up the page.
-    #[arg(long, value_enum, default_value_t = Axis::Y)]
-    up: Axis,
-    /// Fill triangles by stretch.
-    #[arg(long, value_enum, default_value_t = Heatmap::None)]
-    heatmap: Heatmap,
-    /// Per-direction stretch at which heatmap colours saturate.
-    #[arg(long, default_value_t = 1.5)]
-    heatmap_range: f64,
-    /// Maximum ARAP iterations.
-    #[arg(long, default_value_t = 500)]
-    max_iterations: usize,
-    /// ARAP relative energy tolerance.
-    #[arg(long, default_value_t = 1e-8)]
-    tolerance: f64,
-    /// Do not equalise the flat lengths of the two sides of each seam.
-    #[arg(long)]
-    no_seam_matching: bool,
-    /// Weight of the seam-length constraints during matching.
-    #[arg(long, default_value_t = 10.0)]
-    seam_weight: f64,
-    /// Warn when the two sides of a seam differ by more than this (mm).
-    #[arg(long, default_value_t = 1.0)]
-    seam_tolerance: f64,
-    /// Fraction of the reduction applied along the body (0–1): 1 reduces
-    /// length as much as girth; 0.3–0.5 is typical for latex.
-    #[arg(long, default_value_t = 1.0)]
-    length_relief: f64,
-    /// Latex thickness (mm) for the pressure map when no calibration is given.
-    #[arg(long, default_value_t = 0.4)]
-    thickness: f64,
-    /// Glue overlap added to one side of each seam (mm).
-    #[arg(long, default_value_t = 6.0)]
-    glue_allowance: f64,
-    /// Which side of a seam carries the glue overlap (seams can override this).
-    #[arg(long, value_enum, default_value_t = Side::Left)]
-    allowance_side: Side,
-    /// Allowance on open edges such as hems and necklines (mm).
-    #[arg(long, default_value_t = 0.0)]
-    hem_allowance: f64,
-    /// Body distance between automatic notches (mm); 0 for explicit notches only.
-    #[arg(long, default_value_t = 50.0)]
-    notch_spacing: f64,
-    /// Lay all pieces out on a sheet of this width (mm) and write layout.svg.
-    #[arg(long)]
-    sheet_width: Option<f64>,
-    /// Gap between pieces on the sheet (mm).
-    #[arg(long, default_value_t = 5.0)]
-    sheet_gap: f64,
-    /// Do not rotate pieces by 90° when laying them out.
-    #[arg(long)]
-    no_rotate: bool,
-    /// Smooth piece outlines over about this scale σ (mm); 0 keeps them as
-    /// flattened.
-    #[arg(long, default_value_t = latexpat_core::flatten::DEFAULT_OUTLINE_SMOOTHING_MM)]
-    smooth_outline: f64,
-    /// Smooth the body shape over about this scale σ (mm) before
-    /// flattening, so hollows and bumps latex bridges do not shape the
-    /// pattern; 0 flattens it as given.
-    #[arg(long, default_value_t = latexpat_core::flatten::DEFAULT_BODY_SMOOTHING_MM)]
-    smooth_body: f64,
-    /// With --project: also check the pattern on the body in this pose
-    /// (arms-up, arms-forward, arms-out, squat, sitting, step).
-    #[arg(long, requires = "project")]
-    pose: Option<String>,
-    /// Strip on each side of a zip seam for the zip tape (mm).
-    #[arg(long, default_value_t = 10.0)]
-    zip_allowance: f64,
-    /// Also write pattern.pdf: pieces at full size tiled over this paper.
-    #[arg(long, value_enum)]
-    pdf: Option<PaperArg>,
-}
-
-#[derive(Clone, Copy, ValueEnum)]
-enum PaperArg {
-    A4,
-    Letter,
-}
-
-#[derive(Clone, Copy, ValueEnum)]
-enum Side {
-    Left,
-    Right,
-    Both,
-    None,
-}
-
-impl From<Side> for AllowanceSide {
-    fn from(s: Side) -> Self {
-        match s {
-            Side::Left => AllowanceSide::Left,
-            Side::Right => AllowanceSide::Right,
-            Side::Both => AllowanceSide::Both,
-            Side::None => AllowanceSide::None,
-        }
-    }
-}
-
-#[derive(Clone, Copy, ValueEnum)]
-enum Axis {
-    X,
-    Y,
-    Z,
-    #[value(name = "-x")]
-    NegX,
-    #[value(name = "-y")]
-    NegY,
-    #[value(name = "-z")]
-    NegZ,
-}
-
-impl Axis {
-    fn vec(self) -> DVec3 {
-        match self {
-            Axis::X => DVec3::X,
-            Axis::Y => DVec3::Y,
-            Axis::Z => DVec3::Z,
-            Axis::NegX => DVec3::NEG_X,
-            Axis::NegY => DVec3::NEG_Y,
-            Axis::NegZ => DVec3::NEG_Z,
-        }
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, ValueEnum)]
-enum Heatmap {
-    None,
-    /// Largest principal stretch.
-    Max,
-    /// Area stretch (product of principal stretches).
-    Area,
 }
 
 fn main() -> Result<()> {
     match Cli::parse().command {
-        Command::Flatten(args) => flatten(args),
-        Command::Calibrate(args) => calibrate_cmd(args),
+        Command::Templates => {
+            for t in TEMPLATES {
+                println!("{:<16} {}: {}", t.id, t.name, t.description);
+            }
+            Ok(())
+        }
         Command::Body(args) => body_cmd(args),
-        Command::Human(args) => human_cmd(args),
+        Command::Template(args) => template_cmd(args),
+        Command::Redraft(args) => redraft_cmd(args),
+        Command::Pattern(args) => pattern_cmd(args),
+        Command::Calibrate(args) => calibrate_cmd(args),
     }
 }
 
-/// Fitted measurements more than this far (mm) from the request are flagged.
-const FIT_WARNING_MM: f64 = 5.0;
+fn read(path: &Path) -> Result<String> {
+    fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))
+}
 
-fn human_cmd(args: HumanArgs) -> Result<()> {
-    let t = fs::read_to_string(&args.project)
-        .with_context(|| format!("reading {}", args.project.display()))?;
-    let project: Project =
-        serde_json::from_str(&t).with_context(|| format!("parsing {}", args.project.display()))?;
-    let model = BodyModel::bundled();
-    let measurer = Measurer::new(&model)?;
-    let b = fit(
-        &model,
-        &measurer,
-        &project.body.measurements,
-        &project.body.shape,
-    )?;
-    fs::create_dir_all(&args.output)
-        .with_context(|| format!("creating {}", args.output.display()))?;
-    write(&args.output.join("body.obj"), &write_obj(&b.mesh))?;
-    write(
-        &args.output.join("measurements.json"),
-        &serde_json::to_string_pretty(&b.measured)?,
-    )?;
+fn write(path: &Path, contents: &str) -> Result<()> {
+    fs::write(path, contents).with_context(|| format!("writing {}", path.display()))
+}
 
-    println!("{:<14} {:>10} {:>10}", "measurement", "requested", "fitted");
-    for m in &b.measured {
-        let req = m
-            .requested
-            .map(|r| format!("{r:.1}"))
-            .unwrap_or_else(|| "-".into());
-        println!("{:<14} {:>10} {:>10.1}", m.kind.name(), req, m.value);
+fn read_project(path: &Path) -> Result<Project> {
+    let p: Project = serde_json::from_str(&read(path)?)
+        .with_context(|| format!("parsing {}", path.display()))?;
+    if p.is_3d() {
+        bail!(
+            "{} was made with the 3D editor, which has been replaced by the flat editor; \
+             start a new design from a template with its measurements (latexpat template ID \
+             --project {})",
+            path.display(),
+            path.display()
+        );
     }
-    for m in &b.measured {
-        if let Some(r) = m.requested {
-            if (m.value - r).abs() > FIT_WARNING_MM {
-                eprintln!(
-                    "warning: {} fitted at {:.0} mm instead of {r:.0} mm; this combination is outside \
-                     what the body model can reach (check the measurement, or adjust the shape options)",
-                    m.kind.name(),
-                    m.value
-                );
-            }
-        }
-    }
-    println!(
-        "fitted in {} iteration(s); wrote {} and measurements.json",
-        b.iterations,
-        args.output.join("body.obj").display()
-    );
-    Ok(())
+    Ok(p)
 }
 
 fn body_cmd(args: BodyArgs) -> Result<()> {
-    let t = fs::read_to_string(&args.measurements)
-        .with_context(|| format!("reading {}", args.measurements.display()))?;
-    let m: BodyMeasurements = serde_json::from_str(&t)
-        .with_context(|| format!("parsing {}", args.measurements.display()))?;
-    let b = torso(
-        &m,
-        &BodyOptions {
-            around: args.around,
-            ring_spacing_mm: args.ring_spacing,
-            style: match args.style {
-                Style::Tube => SeamStyle::Tube,
-                Style::Princess => SeamStyle::Princess,
-            },
-        },
-    )?;
-    fs::create_dir_all(&args.output)
-        .with_context(|| format!("creating {}", args.output.display()))?;
-    let (obj, seams) = (
-        args.output.join("body.obj"),
-        args.output.join("body.seams.json"),
-    );
-    write(&obj, &write_obj(&b.mesh))?;
-    write(&seams, &serde_json::to_string_pretty(&b.seams)?)?;
+    let b = Body::new(&args.body.load()?)?;
+    println!("{:<14} {:>8}", "measurement", "mm");
+    for k in Measure::ALL {
+        let note = if b.estimated.contains(&k) {
+            "  (estimated)"
+        } else {
+            ""
+        };
+        println!("{:<14} {:>8.0}{note}", k.name(), b.get(k));
+    }
+    println!();
+    println!("{:<14} {:>8}", "level", "height");
+    for (name, y) in b.guides() {
+        println!("{name:<14} {y:>8.0}");
+    }
+    Ok(())
+}
+
+fn template_cmd(args: TemplateArgs) -> Result<()> {
+    let body = args.body.load()?;
+    let design = template(&args.id, &body)?;
+    let info = TEMPLATES.iter().find(|t| t.id == args.id).unwrap();
+    let p = Project {
+        name: info.name.into(),
+        body,
+        design,
+        materials: vec![Sheet {
+            name: "black 0.40".into(),
+            color: "#151515".into(),
+            thickness_mm: 0.4,
+            roll_width_mm: 1000.0,
+            ease: None,
+            shear_modulus_mpa: None,
+            price_per_m: None,
+        }],
+        ..Default::default()
+    };
+    write(&args.output, &serde_json::to_string_pretty(&p)?)?;
     println!(
-        "torso: {} vertices, {} triangles, {} seams; levels on rings {:?}",
-        b.mesh.positions().len(),
-        b.mesh.triangles().len(),
-        b.seams.seams.len(),
-        b.level_rings
-    );
-    println!("wrote {} and {}", obj.display(), seams.display());
-    println!(
-        "next: latexpat flatten {} --seams {} -o pattern/",
-        obj.display(),
-        seams.display()
+        "{}: {} pieces, {} seams → {}",
+        info.name,
+        p.design.pieces.len(),
+        p.design.seams.len(),
+        args.output.display()
     );
     Ok(())
 }
 
-fn load_calibration(path: &Path) -> Result<CalibrationResult> {
-    let t = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-    let c: Calibration =
-        serde_json::from_str(&t).with_context(|| format!("parsing {}", path.display()))?;
-    Ok(calibrate(&c)?)
+fn redraft_cmd(args: RedraftArgs) -> Result<()> {
+    let mut p = read_project(&args.project)?;
+    if p.design.block.is_none() {
+        bail!("{} was not drafted from a template", args.project.display());
+    }
+    let measurements: Measurements = serde_json::from_str(&read(&args.measurements)?)
+        .with_context(|| format!("parsing {}", args.measurements.display()))?;
+    p.body.measurements = measurements;
+    p.design = redraft(&p.design, &p.body)?;
+    let out = args.output.as_ref().unwrap_or(&args.project);
+    write(out, &serde_json::to_string_pretty(&p)?)?;
+    println!("redrafted → {}", out.display());
+    Ok(())
+}
+
+fn load_calibration(path: &Path) -> Result<(Calibration, CalibrationResult)> {
+    let c: Calibration = serde_json::from_str(&read(path)?)
+        .with_context(|| format!("parsing {}", path.display()))?;
+    let r = calibrate(&c)?;
+    Ok((c, r))
+}
+
+fn pattern_cmd(args: PatternArgs) -> Result<()> {
+    let mut p = read_project(&args.project)?;
+    if let Some(e) = args.ease {
+        p.settings.ease = e;
+    }
+    if let Some(r) = args.length_relief {
+        p.settings.length_relief = r;
+    }
+    if let Some(paper) = args.pdf {
+        p.settings.paper = match paper {
+            PaperArg::A4 => Some(Paper::A4),
+            PaperArg::Letter => Some(Paper::Letter),
+            PaperArg::None => None,
+        };
+    }
+    if args.sheet_width.is_some() {
+        p.settings.sheet_width_mm = args.sheet_width;
+    }
+    let mut opts = p.job_options();
+    if let Some(c) = &args.calibration {
+        let (calibration, _) = load_calibration(c)?;
+        opts.ease = EaseSpec::Calibrated {
+            calibration,
+            sheet: args.sheet.clone().unwrap_or_default(),
+        };
+    }
+    let out = job::run(&p.design, &opts)?;
+    write_job(&args.output, &out)
+}
+
+fn write_job(dir: &Path, out: &JobOutput) -> Result<()> {
+    fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    let r = &out.report;
+    println!(
+        "{:<16} {:<10} {:>6} {:>6} {:>17}  seams",
+        "piece", "cut", "ease", "along", "cut size (mm)"
+    );
+    for (p, svg) in r.pieces.iter().zip(&out.piece_svgs) {
+        write(&dir.join(&p.file), svg)?;
+        let cut = match (p.copies, p.folded) {
+            (2, _) => "pair",
+            (_, true) => "on fold",
+            _ => "1",
+        };
+        println!(
+            "{:<16} {:<10} {:>6.3} {:>6.3} {:>8.0} × {:<6.0}  {}",
+            p.name,
+            cut,
+            p.ease,
+            p.ease_along,
+            p.cut_width_mm,
+            p.cut_height_mm,
+            p.seams.join(", ")
+        );
+    }
+    if !r.seams.is_empty() {
+        println!();
+        println!(
+            "{:<18} {:>10} {:>10} {:>10}",
+            "seam", "body (mm)", "flat (mm)", "mismatch"
+        );
+        for s in &r.seams {
+            println!(
+                "{:<18} {:>10.1} {:>10.1} {:>10.2}",
+                s.seam, s.a_body_mm, s.a_flat_mm, s.mismatch_mm
+            );
+        }
+    }
+    if let Some(svg) = &out.layout_svg {
+        write(&dir.join("layout.svg"), svg)?;
+    }
+    for (u, svg) in r.materials.iter().zip(&out.material_layouts) {
+        write(&dir.join(&u.file), svg)?;
+        println!(
+            "{}: {:.2} m of a {:.0} mm roll ({:.0} % used){}",
+            u.sheet,
+            u.length_mm / 1000.0,
+            u.roll_width_mm,
+            100.0 * u.utilisation,
+            u.cost.map(|c| format!(", cost {c:.2}")).unwrap_or_default()
+        );
+    }
+    for (i, svg) in out.trim_svgs.iter().enumerate() {
+        write(&dir.join(format!("trim_{i:02}.svg")), svg)?;
+    }
+    if let Some(pdf) = &out.pdf {
+        write(&dir.join("pattern.pdf"), pdf)?;
+    }
+    write(&dir.join("report.json"), &serde_json::to_string_pretty(r)?)?;
+    if !r.assembly.is_empty() {
+        println!();
+        println!("assembly:");
+        for (k, s) in r.assembly.iter().enumerate() {
+            println!("{:>3}. {s}", k + 1);
+        }
+    }
+    for w in &out.warnings {
+        eprintln!("warning: {w}");
+    }
+    println!();
+    println!("wrote {}", dir.display());
+    Ok(())
 }
 
 fn calibrate_cmd(args: CalibrateArgs) -> Result<()> {
-    let r = load_calibration(&args.file)?;
+    let (_, r) = load_calibration(&args.file)?;
     println!("target wearing tension: {:.3} N/cm", r.tension_n_per_cm);
     println!();
     println!(
@@ -382,7 +399,13 @@ fn calibrate_cmd(args: CalibrateArgs) -> Result<()> {
             100.0 * s.relative_error,
             s.ease
         );
-        warn_fit(s);
+        if s.relative_error > 0.1 {
+            eprintln!(
+                "warning: sheet '{}' fits the rubber model poorly ({:.0}% error); re-check its measurements",
+                s.name,
+                100.0 * s.relative_error
+            );
+        }
     }
     println!();
     println!(
@@ -393,380 +416,4 @@ fn calibrate_cmd(args: CalibrateArgs) -> Result<()> {
         println!("  {t:.3} mm → ease {:.3}", r.ease_for_thickness(t)?);
     }
     Ok(())
-}
-
-fn warn_fit(s: &SheetFit) {
-    if s.relative_error > 0.1 {
-        eprintln!(
-            "warning: sheet '{}' fits the rubber model poorly ({:.0}% error); re-check its measurements",
-            s.name,
-            100.0 * s.relative_error
-        );
-    }
-}
-
-fn flatten(args: FlattenArgs) -> Result<()> {
-    if !(args.scale > 0.0 && args.scale.is_finite()) {
-        bail!("--scale must be a positive number");
-    }
-    for (name, v) in [
-        ("--glue-allowance", args.glue_allowance),
-        ("--hem-allowance", args.hem_allowance),
-        ("--zip-allowance", args.zip_allowance),
-        ("--smooth-outline", args.smooth_outline),
-        ("--smooth-body", args.smooth_body),
-        ("--notch-spacing", args.notch_spacing),
-        ("--sheet-gap", args.sheet_gap),
-    ] {
-        if !(v >= 0.0 && v.is_finite()) {
-            bail!("{name} must be zero or a positive number");
-        }
-    }
-    if !(args.heatmap_range > 1.0) {
-        bail!("--heatmap-range must be greater than 1");
-    }
-    let mut materials = None;
-    let (mesh, seams, source, up, along, zones, edges, mirror, posed) =
-        match (&args.project, &args.mesh) {
-            (Some(path), _) => {
-                let t = fs::read_to_string(path)
-                    .with_context(|| format!("reading {}", path.display()))?;
-                let project: Project = serde_json::from_str(&t)
-                    .with_context(|| format!("parsing {}", path.display()))?;
-                let model = BodyModel::bundled();
-                let measurer = Measurer::new(&model)?;
-                let body = fit(
-                    &model,
-                    &measurer,
-                    &project.body.measurements,
-                    &project.body.shape,
-                )?;
-                let g = build(&body.mesh, &project.garment)?;
-                for w in &g.warnings {
-                    eprintln!("warning: {w}");
-                }
-                // Sheets from the project's catalogue, by the design's assignments.
-                let (plan, plan_warnings) =
-                    material_plan(&body.mesh, &g, &project.garment, &project.materials)?;
-                for w in &plan_warnings {
-                    eprintln!("warning: {w}");
-                }
-                materials = plan;
-                let mesh = g.mesh.with_context(|| {
-                    "the project's garment has no area yet: draw its edges and pick a point inside"
-                })?;
-                // Along the body: from the skeleton, at each triangle's centre.
-                let centres: Vec<DVec3> = mesh
-                    .triangles()
-                    .iter()
-                    .map(|t| {
-                        t.iter()
-                            .map(|&i| mesh.positions()[i as usize])
-                            .sum::<DVec3>()
-                            / 3.0
-                    })
-                    .collect();
-                let along = along_body(&body.joints, &centres)?;
-                let zones = zones_on(&body.mesh, &project.garment)?;
-                // Also check the pattern in another pose.
-                let posed = match args.pose.as_deref().filter(|p| *p != "standing") {
-                    Some(id) => {
-                        let pose =
-                            latexpat_core::human::pose::pose_by_id(id).with_context(|| {
-                                let ids: Vec<&str> =
-                                    latexpat_core::human::POSES.iter().map(|p| p.id).collect();
-                                format!("unknown pose '{id}'; poses: {}", ids.join(", "))
-                            })?;
-                        let w = latexpat_core::human::pose::skin_points(
-                            &model,
-                            &body,
-                            mesh.positions(),
-                        )?;
-                        let t = latexpat_core::human::pose::bone_transforms(&model, &body, pose)?;
-                        Some(latexpat_core::human::pose::pose_points(
-                            mesh.positions(),
-                            &w,
-                            &t,
-                        ))
-                    }
-                    None => None,
-                };
-                // The body model is Y-up.
-                (
-                    mesh,
-                    g.seams,
-                    path.display().to_string(),
-                    DVec3::Y,
-                    Some(along),
-                    zones,
-                    g.edges,
-                    g.mirror,
-                    posed,
-                )
-            }
-            (None, Some(path)) => {
-                let text = fs::read_to_string(path)
-                    .with_context(|| format!("reading {}", path.display()))?;
-                let mut mesh =
-                    parse_obj(&text).with_context(|| format!("loading {}", path.display()))?;
-                mesh.scale(args.scale);
-                let seams: SeamSet = match &args.seams {
-                    Some(p) => {
-                        let t = fs::read_to_string(p)
-                            .with_context(|| format!("reading {}", p.display()))?;
-                        serde_json::from_str(&t)
-                            .with_context(|| format!("parsing {}", p.display()))?
-                    }
-                    None => SeamSet::default(),
-                };
-                (
-                    mesh,
-                    seams,
-                    path.display().to_string(),
-                    args.up.vec(),
-                    None,
-                    Vec::new(),
-                    Vec::new(),
-                    None,
-                    None,
-                )
-            }
-            (None, None) => unreachable!("clap requires a mesh or a project"),
-        };
-
-    let ease = match &args.calibration {
-        None => EaseSpec::Uniform(args.ease.unwrap_or(0.85)),
-        Some(path) => {
-            let t =
-                fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-            let calibration: Calibration =
-                serde_json::from_str(&t).with_context(|| format!("parsing {}", path.display()))?;
-            let mut panel_sheets = Vec::new();
-            for ps in &args.panel_sheet {
-                let (i, name) = ps
-                    .split_once('=')
-                    .with_context(|| format!("--panel-sheet '{ps}' must look like 2=0.6mm"))?;
-                let i: usize = i
-                    .trim()
-                    .parse()
-                    .with_context(|| format!("bad panel index in '{ps}'"))?;
-                panel_sheets.push((i, name.to_string()));
-            }
-            EaseSpec::Calibrated {
-                calibration,
-                sheet: args.sheet.clone().expect("clap requires --sheet"),
-                panel_sheets,
-            }
-        }
-    };
-    let opts = JobOptions {
-        ease,
-        arap: ArapOptions {
-            max_iterations: args.max_iterations,
-            tolerance: args.tolerance,
-        },
-        up,
-        seam_matching: (!args.no_seam_matching).then_some(SeamMatching {
-            weight: args.seam_weight,
-            ..Default::default()
-        }),
-        seam_tolerance: args.seam_tolerance,
-        pattern: PatternOptions {
-            seam_allowance: args.glue_allowance,
-            allowance_side: args.allowance_side.into(),
-            hem_allowance: args.hem_allowance,
-            notch_spacing: (args.notch_spacing > 0.0).then_some(args.notch_spacing),
-            zip_allowance: args.zip_allowance,
-        },
-        heatmap: match args.heatmap {
-            Heatmap::None => None,
-            Heatmap::Max => Some(HeatmapMetric::MaxStretch),
-            Heatmap::Area => Some(HeatmapMetric::AreaStretch),
-        },
-        heatmap_range: args.heatmap_range,
-        length_relief: args.length_relief,
-        along,
-        ease_zones: zones,
-        materials,
-        material: Material {
-            thickness_mm: args.thickness,
-            ..Default::default()
-        },
-        sheet: args.sheet_width.map(|w| NestOptions {
-            sheet_width: w,
-            gap: args.sheet_gap,
-            allow_rotation: !args.no_rotate,
-        }),
-        edges,
-        mirror,
-        posed,
-        outline_smoothing_mm: args.smooth_outline,
-        body_smoothing_mm: args.smooth_body,
-        print: args.pdf.map(|p| PrintOptions {
-            paper: match p {
-                PaperArg::A4 => Paper::A4,
-                PaperArg::Letter => Paper::Letter,
-            },
-            ..Default::default()
-        }),
-    };
-    let out = job::run(&mesh, &seams, &opts)?;
-    write_job(&args.output, &source, args.scale, &out)
-}
-
-/// Write a job's files and print its summary tables and warnings.
-fn write_job(dir: &Path, mesh: &str, scale: f64, out: &JobOutput) -> Result<()> {
-    fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
-    let r = &out.report;
-    println!(
-        "{:<10} {:>6} {:>6} {:>9} {:>9} {:>9} {:>9} {:>7} {:>8} {:>8} {:>7} {:>17}  seams",
-        "panel",
-        "tris",
-        "ease",
-        "min σ",
-        "p95 σ",
-        "max σ",
-        "area ×",
-        "slack",
-        "mmHg",
-        "p95 mmHg",
-        "bridge",
-        "size (mm)"
-    );
-    for (p, svg) in r.panels.iter().zip(&out.panel_svgs) {
-        write(&dir.join(&p.file), svg)?;
-        println!(
-            "{:<10} {:>6} {:>6.3} {:>9.4} {:>9.4} {:>9.4} {:>9.4} {:>6.1}% {:>8.1} {:>8.1} {:>6.1}% {:>8.1} × {:<6.1}  {}",
-            p.index,
-            p.triangles,
-            p.ease,
-            p.min_stretch,
-            p.p95_stretch,
-            p.max_stretch,
-            p.mean_area_stretch,
-            100.0 * p.slack_fraction,
-            p.mean_pressure_mmhg,
-            p.p95_pressure_mmhg,
-            100.0 * p.bridging_fraction,
-            p.flat_width_mm,
-            p.flat_height_mm,
-            p.seams.join(", ")
-        );
-    }
-    if !r.seams.is_empty() {
-        println!();
-        println!(
-            "{:<22} {:>9} {:>9} {:>9} {:>9} {:>17}",
-            "seam", "panels", "body", "left", "right", "mismatch (mm)"
-        );
-    }
-    for s in &r.seams {
-        println!(
-            "{:<22} {:>9} {:>9.1} {:>9.1} {:>9.1} {:>+8.2} (was {:+.2})",
-            s.seam,
-            format!("{}↔{}", s.left_panel, s.right_panel),
-            s.body_length_mm,
-            s.left_length_mm,
-            s.right_length_mm,
-            s.mismatch_mm,
-            s.mismatch_before_matching_mm
-        );
-    }
-    if let (Some(l), Some(svg)) = (&r.layout, &out.layout_svg) {
-        write(&dir.join(&l.file), svg)?;
-        println!();
-        println!(
-            "layout: {:.0} mm of {:.0} mm wide sheet ({:.0}% used) → {}",
-            l.length_mm,
-            l.sheet_width_mm,
-            100.0 * l.utilisation,
-            l.file
-        );
-    }
-    if !r.materials.is_empty() {
-        println!();
-        println!(
-            "{:<20} {:>6} {:>8} {:>11} {:>9} {:>6} {:>8}  pieces",
-            "sheet", "t (mm)", "roll", "length (m)", "area m²", "used", "cost"
-        );
-    }
-    for (u, svg) in r.materials.iter().zip(&out.material_layouts) {
-        write(&dir.join(&u.file), svg)?;
-        println!(
-            "{:<20} {:>6.2} {:>8.0} {:>11.2} {:>9.3} {:>5.0}% {:>8}  {:?} → {}",
-            u.sheet,
-            u.thickness_mm,
-            u.roll_width_mm,
-            u.length_mm / 1000.0,
-            u.pieces_area_m2,
-            100.0 * u.utilisation,
-            u.cost
-                .map(|c| format!("{c:.2}"))
-                .unwrap_or_else(|| "-".into()),
-            u.pieces,
-            u.file
-        );
-    }
-    if r.panels.iter().any(|p| p.posed_p95_stretch.is_some()) {
-        println!();
-        println!("{:<10} {:>14} {:>14}", "in pose", "p95 σ", "p95 mmHg");
-        for p in &r.panels {
-            println!(
-                "{:<10} {:>6.3} → {:<6.3} {:>6.1} → {:<6.1}",
-                p.index,
-                p.p95_stretch,
-                p.posed_p95_stretch.unwrap_or(f64::NAN),
-                p.p95_pressure_mmhg,
-                p.posed_p95_pressure_mmhg.unwrap_or(f64::NAN)
-            );
-        }
-    }
-    for (k, (t, svg)) in r.trims.iter().zip(&out.trim_svgs).enumerate() {
-        if k == 0 {
-            println!();
-        }
-        let file = format!("trim_{k:02}.svg");
-        write(&dir.join(&file), svg)?;
-        println!(
-            "trim for {}: {:.0} × {:.0} mm (edge {:.0} mm) → {file}",
-            t.edge, t.length_mm, t.width_mm, t.edge_length_mm
-        );
-    }
-    if !r.assembly.is_empty() {
-        println!();
-        println!("assembly:");
-        for (k, step) in r.assembly.iter().enumerate() {
-            println!("{:>3}. {step}", k + 1);
-        }
-    }
-    if let Some(pdf) = &out.pdf {
-        write(&dir.join("pattern.pdf"), pdf)?;
-        println!();
-        println!("print: pattern.pdf (print at 100 %, check the 50 mm square)");
-    }
-    for w in &out.warnings {
-        eprintln!("warning: {w}");
-    }
-
-    #[derive(Serialize)]
-    struct FileReport<'a> {
-        mesh: &'a str,
-        scale: f64,
-        #[serde(flatten)]
-        report: &'a Report,
-    }
-    write(
-        &dir.join("report.json"),
-        &serde_json::to_string_pretty(&FileReport {
-            mesh,
-            scale,
-            report: r,
-        })?,
-    )?;
-    println!("wrote {} panel(s) to {}", r.panels.len(), dir.display());
-    Ok(())
-}
-
-fn write(path: &Path, contents: &str) -> Result<()> {
-    fs::write(path, contents).with_context(|| format!("writing {}", path.display()))
 }
