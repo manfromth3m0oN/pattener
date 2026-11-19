@@ -8,7 +8,8 @@
       "muscle": 0.0,
       "cup": 0.0,
       "belly": 0.0,
-      "buttocks": 0.0
+      "buttocks": 0.0,
+      "realistic": false
     }
   },
   "garment": {

@@ -327,8 +327,9 @@ fn flatten_garment_from_project() {
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
     assert!(out.join("panel_00.svg").exists() && out.join("panel_01.svg").exists());
     assert!(!out.join("panel_02.svg").exists());
-    // The design has no bust shaping, so the front's seams come out longer.
-    assert!(String::from_utf8_lossy(&o.stderr).contains("easing in"));
+    // The design has cut-on sleeves and no shaping, so it strains at the
+    // armpits, and says where a seam would help.
+    assert!(String::from_utf8_lossy(&o.stderr).contains("a dart or seam"));
     std::fs::remove_dir_all(&out).unwrap();
 }
 

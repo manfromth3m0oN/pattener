@@ -1492,8 +1492,8 @@ pub(crate) mod tests {
 
     #[test]
     fn top_builds_into_front_and_back() {
-        let (mesh, tapes) = body();
-        let design = top(&mesh, &tapes);
+        let (mesh, _) = body();
+        let design = top(&fitted());
         let g = build(&mesh, &design).unwrap();
         assert!(g.warnings.is_empty(), "{:?}", g.warnings);
         assert_eq!(g.curves.len(), 8);
@@ -1525,25 +1525,18 @@ pub(crate) mod tests {
             );
         }
         // A one-piece front over the bust has longer side and shoulder
-        // seams than the back. Matching halves the difference without
-        // folding the panels, and the rest is reported as needing shaping.
+        // seams than the back (by 15–22 mm). Matching evens them out
+        // without folding the panels.
         for s in &out.report.seams {
-            assert!(
-                s.mismatch_mm.abs() < 0.75 * s.mismatch_before_matching_mm.abs(),
-                "{s:?}"
-            );
+            assert!(s.mismatch_before_matching_mm.abs() > 10.0, "{s:?}");
+            assert!(s.mismatch_mm.abs() < 2.0, "{s:?}");
         }
-        assert!(
-            out.warnings.iter().any(|w| w.contains("easing in")),
-            "{:?}",
-            out.warnings
-        );
     }
 
     #[test]
     fn pressure_map_and_ease_zone_on_the_top() {
         let (mesh, tapes) = body();
-        let mut design = top(&mesh, &tapes);
+        let mut design = top(&fitted());
         let g = build(&mesh, &design).unwrap();
         let gm = g.mesh.as_ref().unwrap();
         let plain = run(gm, &g.seams, &JobOptions::default()).unwrap();
@@ -1600,7 +1593,7 @@ pub(crate) mod tests {
     fn sheet_assignments_follow_points() {
         use crate::materials::Sheet;
         let (mesh, tapes) = body();
-        let mut design = top(&mesh, &tapes);
+        let mut design = top(&fitted());
         let sheet = |name: &str, color: &str| Sheet {
             name: name.into(),
             color: color.into(),
@@ -1656,8 +1649,8 @@ pub(crate) mod tests {
 
     #[test]
     fn assembly_order_on_the_top() {
-        let (mesh, tapes) = body();
-        let design = top(&mesh, &tapes);
+        let (mesh, _) = body();
+        let design = top(&fitted());
         let g = build(&mesh, &design).unwrap();
         let out = run(g.mesh.as_ref().unwrap(), &g.seams, &JobOptions::default()).unwrap();
         let steps = &out.report.assembly;
@@ -1685,8 +1678,8 @@ pub(crate) mod tests {
     fn curve_finishes_reach_the_pattern() {
         use crate::pattern::EdgeFinish;
         use crate::seams::SeamFinish;
-        let (mesh, tapes) = body();
-        let mut design = top(&mesh, &tapes);
+        let (mesh, _) = body();
+        let mut design = top(&fitted());
         for c in &mut design.curves {
             match c.name.as_str() {
                 "neckline" => {
@@ -1745,6 +1738,46 @@ pub(crate) mod tests {
         assert!(pdf.contains("neckline trim  -  page A1"));
         if let Ok(path) = std::env::var("LATEXPAT_WRITE_PDF") {
             std::fs::write(path, pdf).unwrap();
+        }
+    }
+
+    #[test]
+    fn template_necklines_sit_at_the_base_of_the_neck() {
+        use super::examples::TEMPLATES;
+        for body_type in [0.0, 1.0] {
+            let fitted = fitted_as(body_type);
+            let (p, t) = (fitted.mesh.positions(), fitted.mesh.triangles());
+            let joint = fitted.joints.iter().find(|j| j.0 == "neck").unwrap().1;
+            let tape = fitted
+                .tapes
+                .iter()
+                .find(|k| k.0 == MeasureKind::Neck)
+                .unwrap();
+            let tape_y = tape.1.iter().map(|q| q.y).sum::<f64>() / tape.1.len() as f64;
+            for tpl in TEMPLATES.iter() {
+                let d = (tpl.build)(&fitted);
+                let Some(neck) = d.curves.iter().find(|c| c.name == "neckline") else {
+                    continue;
+                };
+                let pts: Vec<DVec3> = neck
+                    .points
+                    .iter()
+                    .map(|s| s.position(p, t).unwrap())
+                    .collect();
+                let (lo, hi) = pts
+                    .iter()
+                    .fold((f64::MAX, f64::MIN), |(a, b), q| (a.min(q.y), b.max(q.y)));
+                // Round the base of the neck, below the girth tape; lower
+                // at the front than at the back.
+                assert!(
+                    hi < tape_y && (lo - joint.y).abs() < 40.0,
+                    "{}: {lo}..{hi}",
+                    tpl.id
+                );
+                let front = pts.iter().max_by(|a, b| a.z.total_cmp(&b.z)).unwrap();
+                let back = pts.iter().min_by(|a, b| a.z.total_cmp(&b.z)).unwrap();
+                assert!(front.y < back.y - 10.0, "{}", tpl.id);
+            }
         }
     }
 
@@ -1810,11 +1843,10 @@ pub(crate) mod tests {
         use super::examples::{cincher, top};
         use crate::flatten::{flatten_garment, FlattenOptions};
         use crate::outline::mirror_partners;
-        let (mesh, tapes) = body();
+        let (mesh, _) = body();
         // The cincher: left and right fronts and backs; the top: front and
         // back, each symmetric about the centre line.
-        for (design, expect_pairs) in [(cincher(&mesh, &tapes), true), (top(&mesh, &tapes), false)]
-        {
+        for (design, expect_pairs) in [(cincher(&fitted()), true), (top(&fitted()), false)] {
             let g = build(&mesh, &design).unwrap();
             let gm = g.mesh.as_ref().unwrap();
             let opts = FlattenOptions {
@@ -1866,11 +1898,11 @@ pub(crate) mod tests {
             )
         };
         // The cincher lies flat: no hints.
-        let (_, out) = job(&cincher(mesh, tapes));
+        let (_, out) = job(&cincher(&fitted));
         assert!(out.report.panels.iter().all(|p| p.strain_hint.is_none()));
         // The cut-on top strains at the armpits (where set-in sleeves would
         // help): its hint is there.
-        let (_, out) = job(&super::examples::top_finished(mesh, tapes));
+        let (_, out) = job(&super::examples::top_finished(&fitted));
         let hint = out.report.panels[0]
             .strain_hint
             .expect("a hint on the front");
@@ -1959,13 +1991,23 @@ pub(crate) mod tests {
             assert!(p.posed_p95_stretch.unwrap() > p.p95_stretch, "{}", p.index);
         }
         assert!(r[2].posed_p95_stretch.unwrap() > r[0].posed_p95_stretch.unwrap());
-        assert!(r[0].posed_p95_stretch.unwrap() < 2.5 && r[1].posed_p95_stretch.unwrap() < 2.5);
+        let sleeve =
+            |p: &&crate::job::PanelReport| p.seams.iter().any(|n| n.starts_with("underarm"));
+        let (sleeves, body): (Vec<_>, Vec<_>) = r.iter().partition(sleeve);
+        assert_eq!((sleeves.len(), body.len()), (2, 2));
+        let most = |ps: &[&crate::job::PanelReport]| {
+            ps.iter()
+                .map(|p| p.posed_p95_stretch.unwrap())
+                .fold(0.0, f64::max)
+        };
+        assert!(most(&sleeves) > most(&body));
+        assert!(most(&body) < 2.5, "{}", most(&body));
     }
 
     #[test]
     fn asymmetric_designs_build_each_side() {
-        let (mesh, tapes) = body();
-        let mut design = top(&mesh, &tapes);
+        let (mesh, _) = body();
+        let mut design = top(&fitted());
         design.asymmetric = true;
         let g = build(&mesh, &design).unwrap();
         assert!(g.mirror.is_none());
@@ -1974,8 +2016,8 @@ pub(crate) mod tests {
 
     #[test]
     fn unenclosed_garment_is_reported() {
-        let (mesh, tapes) = body();
-        let mut design = top(&mesh, &tapes);
+        let (mesh, _) = body();
+        let mut design = top(&fitted());
         design.curves.retain(|c| c.name == "side");
         let g = build(&mesh, &design).unwrap();
         assert!(

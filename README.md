@@ -42,8 +42,9 @@ page with Playwright.
 The web app opens on a full body fitted to your tape measurements (any of
 15: height, inseam, waist height, arm length and 11 girths), shown in 3D
 with the tape positions on it. Body type, muscle, cup, belly and buttocks
-are set by eye. Projects (name, measurements, shape, units) save to a
-`.latexpat.json` file and autosave in the browser.
+are set by eye. Projects (name, measurements, shape, units, the garment,
+sheets and pattern settings) save to a `.latexpat.json` file and autosave
+in the browser.
 
 **Mannequin.** The body is shown as a dressmaker's mannequin: the head
 becomes a smooth form, and the nipples and genitals are smoothed away
@@ -172,8 +173,9 @@ body. The pressure map still uses the real body. Set it with
 ### Templates
 
 **Start from template** replaces the garment with one of these starting
-designs, built from the body's tape loops and skeleton so they follow your
-measurements. The tops show the common ways of shaping a sleeve and a bust:
+designs, built for the body in use from its tape loops and skeleton, so they
+follow your measurements and figure. Necklines sit at the base of the neck
+(a plane through the neck joint, lower at the front). The tops show the common ways of shaping a sleeve and a bust:
 
 | Template | Pieces | Construction |
 |---|---|---|
@@ -202,11 +204,12 @@ Above 10 %, the report says so, and the web app marks the spot on the body
 with a red ring. The fix is a dart or seam from the nearest edge towards
 the ring, or a set-in sleeve at an armpit.
 
-On the templates (mannequin body), the cut-on top is marked at the
-armpits, where set-in sleeves would help. So are the princess top's side
-fronts and the catsuit's fronts. The set-in and raglan tops and the cincher
-are not marked. With **Realistic detail** the nipples also push the
-set-in and raglan fronts over the line at the bust.
+On the templates (women's figure), these are marked:
+- **Armpits:** the cut-on top's front and back, where set-in sleeves would help. Also the princess top's side fronts and back, and the catsuit's fronts.
+- **Bust:** the set-in and raglan fronts (11–12 %), and the set-in catsuit's fronts.
+- **Elbows:** the set-in catsuit's sleeves, just over the line.
+
+The cincher and leggings are not marked.
 
 ### Construction and printing
 
@@ -252,8 +255,8 @@ the plane section between samples (with a shortest-path fallback where the
 plane cannot join two points, as at the armpit), the mesh is cleaned of
 tiny edges and slivers, and the garment area is flood-filled from the
 inside point without crossing edges. Seam matching never folds a panel to
-make seams equal: a seam that needs shaping keeps its difference and is
-reported (the example top, with no bust shaping, warns about this).
+make seams equal: a seam that needs shaping keeps its difference, and a
+difference over the tolerance is reported.
 
 ## Quick torso from measurements
 

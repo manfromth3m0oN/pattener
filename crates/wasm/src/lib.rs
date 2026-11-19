@@ -28,6 +28,7 @@
 use latexpat_core::body::{torso, BodyMeasurements, BodyOptions};
 use latexpat_core::calibrate::{calibrate, Calibration};
 use latexpat_core::cut::cut_panels;
+use latexpat_core::garment::examples::TEMPLATES;
 use latexpat_core::garment::{build, material_plan, panel_faces, zones_on, GarmentDesign};
 use latexpat_core::glam::DVec3;
 use latexpat_core::human::{along_body, fit, pose, BodyModel, HumanBody, Measurer};
@@ -61,6 +62,13 @@ enum Request {
     },
     Calibrate {
         calibration: Calibration,
+    },
+    /// A template from the library, built on this body (templates follow
+    /// the body's landmarks, so one built on another figure can miss).
+    Template {
+        #[serde(default)]
+        body: BodySpec,
+        id: String,
     },
     Human {
         #[serde(default)]
@@ -368,6 +376,14 @@ fn run(request: &str) -> Result<Value, String> {
             let r = calibrate(&calibration).map_err(|e| e.to_string())?;
             Ok(json!({ "ok": true, "result": r }))
         }
+        Request::Template { body, id } => {
+            let t = TEMPLATES
+                .iter()
+                .find(|t| t.id == id)
+                .ok_or_else(|| format!("no template '{id}'"))?;
+            let b = fitted(&body)?;
+            Ok(json!({ "ok": true, "design": (t.build)(&b) }))
+        }
     }
 }
 
@@ -463,6 +479,25 @@ mod tests {
         assert!(r["tapes"].as_array().unwrap().len() >= 10);
         let bad = parse(&handle(
             r#"{"command": "human", "body": {"measurements": {"elbow": 3}}}"#,
+        ));
+        assert_eq!(bad["ok"], false);
+    }
+
+    #[test]
+    fn templates_are_built_on_the_body_in_use() {
+        // The men's figure: a raglan top built for it makes its four pieces.
+        let body = json!({ "measurements": {}, "shape": { "body_type": 1.0 } });
+        let t = parse(&handle(
+            &json!({ "command": "template", "body": body, "id": "top-raglan" }).to_string(),
+        ));
+        assert_eq!(t["ok"], true, "{}", t["error"]);
+        let g = parse(&handle(
+            &json!({ "command": "garment", "body": body, "design": t["design"] }).to_string(),
+        ));
+        assert_eq!(g["ok"], true, "{}", g["error"]);
+        assert_eq!(g["panels"], 4);
+        let bad = parse(&handle(
+            &json!({ "command": "template", "id": "nope" }).to_string(),
         ));
         assert_eq!(bad["ok"], false);
     }
