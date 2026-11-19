@@ -371,6 +371,13 @@ if (viewer) {
       });
       setPicking(design.curves[active] ? 'add' : null);
     } else if (design.curves[active]) {
+      // A click on one of the curve's own points doesn't add it again.
+      const q = pointOf(sp);
+      const on = design.curves[active].points.some((p) => {
+        const r = pointOf(p);
+        return Math.hypot(r[0] - q[0], r[1] - q[1], r[2] - q[2]) < 3;
+      });
+      if (on) return;
       design.curves[active].points.push(sp);
     } else {
       return;
@@ -417,10 +424,10 @@ if (viewer) {
     dragging.set({ face: hit.face, u: hit.u, v: hit.v });
     drawMarks();
   };
-  viewer.onDragEnd = () => {
+  viewer.onDragEnd = (e, moved) => {
     if (!dragging) return;
     dragging = null;
-    changed();
+    if (moved) changed();
   };
 }
 
@@ -610,8 +617,11 @@ $('g-example').onclick = async () => {
   const id = $('g-template').value || 'top';
   const name = (templates.find((t) => t.id === id) || { name: id }).name;
   if (design.curves.length && !confirm(`Replace the current garment with the ${name.toLowerCase()} template?`)) return;
+  // The example file carries the template's sheets; the curves are built
+  // for the body in use, since a template follows the body's landmarks.
   const p = await (await fetch(`examples/${id}.project.json`)).json();
-  design = p.garment;
+  const r = await call({ command: 'template', body: readBody(), id });
+  design = r.ok ? r.design : p.garment;
   design.zones = design.zones || [];
   design.sheet_assignments = design.sheet_assignments || [];
   if (p.materials && p.materials.length) { materials = p.materials; renderSheets(); }
@@ -658,8 +668,22 @@ document.querySelectorAll('input[name=figure]').forEach((r) => {
   };
 });
 $('s-body_type').addEventListener('input', syncFigure);
+// Pattern settings saved with the project, by element id.
+const SETTINGS = ['ease', 'length-relief', 'thickness', 'match', 'allowance', 'allowance-side', 'hem', 'zip',
+  'notch', 'smooth', 'smooth-body', 'heatmap', 'paper', 'sheet-width', 'calib-sheet'];
+const readSettings = () => Object.fromEntries(SETTINGS.map((id) => [id, $(id).type === 'checkbox' ? $(id).checked : $(id).value]));
+const DEFAULT_SETTINGS = readSettings();
+// A setting missing from the project (e.g. one saved before settings were
+// kept) takes its default.
+function writeSettings(s) {
+  for (const id of SETTINGS) {
+    const v = s && id in s ? s[id] : DEFAULT_SETTINGS[id];
+    if ($(id).type === 'checkbox') $(id).checked = !!v; else $(id).value = v;
+  }
+}
+for (const id of SETTINGS) $(id).addEventListener('change', () => saveLocal());
 function readProject() {
-  return { version: 1, name: $('project-name').value.trim() || 'Untitled', body: readBody(), garment: design, materials, units };
+  return { version: 1, name: $('project-name').value.trim() || 'Untitled', body: readBody(), garment: design, materials, units, settings: readSettings() };
 }
 function writeProject(p) {
   $('project-name').value = p.name || 'Untitled';
@@ -671,6 +695,7 @@ function writeProject(p) {
   design.sheet_assignments = design.sheet_assignments || [];
   materials = Array.isArray(p.materials) && p.materials.length ? p.materials : DEFAULT_SHEETS();
   renderSheets();
+  writeSettings(p.settings);
   active = -1;
   setPicking(null);
 }

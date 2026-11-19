@@ -43,9 +43,16 @@ const done = (p) => p.waitForFunction(
   await page.click('#fit-body');
   await fitted();
   assert.ok(await page.locator('#fit-warnings li').count() > 0);
+  // Pattern settings are kept with the project too.
+  await tab('settings');
+  await page.fill('#length-relief', '55');
+  await page.press('#length-relief', 'Tab');
   await page.reload();
   await fitted();
   assert.equal(await page.inputValue('#m-underbust'), '120');
+  assert.equal(await page.inputValue('#length-relief'), '55');
+  assert.equal(await page.evaluate(() => readProject().settings['length-relief']), '55');
+  await tab('body');
   await page.evaluate(() => localStorage.clear());
   await page.reload();
   await fitted();
@@ -101,6 +108,17 @@ const done = (p) => p.waitForFunction(
   assert.ok(moved.y3 < t.y3 - 20, `dragged point should move down: ${t.y3} -> ${moved.y3}`);
   assert.equal(moved.n, t.n);
   assert.equal(moved.yaw, t.yaw);
+  await garmentReady();
+  // A click right next to a point (close enough to grab it) adds a point
+  // rather than nudging that one; Undo point takes it away again.
+  const near = await page.evaluate((i) => {
+    const s = viewer.project(pointOf(design.curves[active].points[i]));
+    return { x: s.x + 6, y: s.y, n: design.curves[active].points.length };
+  }, t.i);
+  await page.mouse.click(dbox.x + near.x, dbox.y + near.y);
+  await page.waitForFunction((n) => design.curves[active].points.length === n + 1, near.n, { timeout: 10000 });
+  await page.click('#g-undo');
+  await page.waitForFunction((n) => design.curves[active].points.length === n, near.n, { timeout: 10000 });
   await garmentReady();
   // Paint the back with the example's second sheet (turn the view to the
   // back first): one piece turns red.
@@ -223,6 +241,11 @@ const done = (p) => p.waitForFunction(
   await page.selectOption('#g-template', 'leggings');
   await page.click('#g-example');
   await page.waitForFunction(() => /2 flat pieces/.test(document.getElementById('g-status').textContent), null, { timeout: 90000 });
+  // Templates are built for the figure in use: the raglan top makes its
+  // four pieces on the men's figure too.
+  await page.selectOption('#g-template', 'top-raglan');
+  await page.click('#g-example');
+  await page.waitForFunction(() => /4 flat pieces/.test(document.getElementById('g-status').textContent), null, { timeout: 90000 });
 
   // 5. On a phone: one screen at a time from the bottom bar; nothing wider
   // than the screen, tap-for-help, pinch to zoom, double-tap to reset, tap

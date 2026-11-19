@@ -48,7 +48,8 @@ class Viewer {
 
     this.onClick = null;
     // onPress(e) may return true to claim a drag (then onDrag / onDragEnd
-    // get the pointer events instead of orbiting the view).
+    // get the pointer events instead of orbiting the view). onDragEnd(e,
+    // moved) is told whether the pointer moved; if not, onClick follows.
     this.onPress = null;
     this.onDrag = null;
     this.onDragEnd = null;
@@ -84,9 +85,11 @@ class Viewer {
         drag = null;
         return;
       }
-      if (claimed) {
-        if (this.onDragEnd) this.onDragEnd(e);
+      if (claimed && travelled >= 5) {
+        if (this.onDragEnd) this.onDragEnd(e, true);
       } else if (drag && travelled < 5) {
+        // Pressed on a point but didn't move it: a click after all.
+        if (claimed && this.onDragEnd) this.onDragEnd(e, false);
         // A tap (not a drag) picks a point; two quick taps reset the view.
         const now = performance.now();
         if (e.pointerType === 'touch' && now - lastTap < 300) {
@@ -116,7 +119,9 @@ class Viewer {
       if (!drag) return;
       travelled += Math.abs(e.clientX - drag[0]) + Math.abs(e.clientY - drag[1]);
       if (claimed) {
-        if (this.onDrag) this.onDrag(e);
+        // A point moves once the pointer has travelled a little, so a
+        // click next to a point still adds one.
+        if (this.onDrag && travelled >= 5) this.onDrag(e);
         drag = [e.clientX, e.clientY];
         return;
       }

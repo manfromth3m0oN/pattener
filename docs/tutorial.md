@@ -196,7 +196,7 @@ Open **Settings** in the right panel.
 - **Notch spacing** (50 mm): matching marks along each seam.
 - **Printable PDF** (A4 or Letter): every piece at full size, tiled over pages.
 
-Settings are not stored in the project file yet, so note any you change.
+The settings are saved with the project.
 
 ## 10. Make the pattern
 
@@ -282,7 +282,7 @@ Set the pose back to **Standing** when you're done.
 ## 13. Save, print and make it
 
 **Save** downloads the project as `Sleeveless_top.latexpat.json`, holding the
-body, the garment and the sheets. **Open** brings it back. The app also keeps
+body, the garment, the sheets and the pattern settings. **Open** brings it back. The app also keeps
 your work in the browser between visits.
 
 To print:
